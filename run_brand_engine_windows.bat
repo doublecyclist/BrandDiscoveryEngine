@@ -1,0 +1,6 @@
+@echo off
+echo Installing requirements...
+pip install -r requirements.txt
+echo Running Brand Discovery Engine...
+python brand_engine.py --input candidates.csv --output brand_results.xlsx
+pause
