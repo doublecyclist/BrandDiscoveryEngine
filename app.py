@@ -250,7 +250,6 @@ display_name = (active_entry['display_name'] or p['title']) if active_entry else
 st.caption(f"Active project: {display_name} | {st.session_state.project_filename} | {len(p['names'])} candidates")
 st.subheader('Brand screening · Quick overview')
 st.caption('Review a name, make a decision, and move on. Open detailed evidence only when needed.')
-rows = export_rows(p)
 
 with st.expander('Domain pricing (read-only)', expanded=True):
     budget = st.number_input('Maximum domain acquisition price (USD)', min_value=0.0,
@@ -313,7 +312,8 @@ with st.expander('Domain pricing (read-only)', expanded=True):
              f"Over budget: {pricing_counts['Over budget']} · "
              f"Stale quotes: {pricing_counts['Stale quotes']} · "
              f"Unavailable or unknown price: {pricing_counts['Unavailable or unknown price']}")
-    st.caption('Saved cache only, independent of shortlist decisions and lookup scope. '
+    st.caption('Counts cover all checked domains before the view and search; stale over-budget quotes appear in both counts. '
+               'Saved cache is independent of shortlist decisions and lookup scope. '
                'Provisional totals exclude unverified charges and are not Affordable. '
                'Verified affordable requires a fresh, confirmed final all-in total within your budget. '
                'Stale quotes and failed refreshes retain the last known price and require verification.')
@@ -380,6 +380,7 @@ with st.expander('Domain pricing (read-only)', expanded=True):
                 except ValueError as exc:
                     st.error(str(exc))
 
+rows = export_rows(p)
 research_by_name = latest_results(p)
 price_rows = {r['Name']: pricing_fields(p, r['Name'], research_row=research_by_name.get(r['Name'].casefold())) for r in rows}
 if rows:
@@ -390,7 +391,8 @@ if rows:
     prior_summary = latest_results(p)
     for candidate_name in p['names']:
         research_totals[research_state(p, candidate_name, prior_summary.get(candidate_name.casefold()))] += 1
-    st.caption(f"Research: {research_totals['Complete']} complete · {research_totals['Incomplete']} incomplete · {research_totals['New']} not yet researched")
+    st.caption(f"All candidates — research: {research_totals['Complete']} complete · {research_totals['Incomplete']} incomplete · {research_totals['New']} not yet researched")
+    st.caption('Decision counts below cover all candidates, before the name filter or search.')
     cols = st.columns(4)
     for col, title, value in zip(cols, ('To review', 'Keep', 'Investigate', 'Discard'), stats):
         col.metric(title, value)
@@ -419,22 +421,31 @@ if rows:
                 (filter_name == 'Keep' and decision == 'Keep') or
                 (filter_name == 'Investigate' and decision == 'Maybe') or
                 (filter_name == 'Discard' and decision == 'Reject') or
-                (filter_name == 'Automatic shortlist' and r.get('Recommendation') == 'Shortlist') or
-                (filter_name == 'Automatic rejects' and r.get('Recommendation') == 'Reject'))
+                (filter_name == 'Automatic shortlist' and r.get('Automatic recommendation') == 'Shortlist'
+                 and r.get('Recommendation') == 'Shortlist') or
+                (filter_name == 'Automatic rejects' and r.get('Automatic recommendation') == 'Reject'))
     candidates = [r for r in rows if eligible(r)]
     st.markdown(f'### {len(candidates)} of {len(rows)} names match this view')
-    st.write('Only your actions save Keep/Investigate/Discard decisions. Screening recommendations are separate; historical saved choices are unchanged.' +
+    st.write('Only your actions save Keep/Investigate/Discard decisions. Screening recommendations use evidence and any conflict-assessment override; historical saved choices are unchanged.' +
              (' Name search is also applied.' if search else ''))
+    if filter_name in ('Automatic shortlist', 'Automatic rejects'):
+        st.caption('Automatic shortlist requires both the automatic and override-aware recommendation to shortlist. '
+                   'Automatic rejects shows pre-override reject recommendations.')
     if candidates:
         index_key = project_key('quick_index_' + filter_name)
         shortlist_frame = None
-        if filter_name in (shortlist_filter, 'Affordable Domains'):
+        if filter_name in (shortlist_filter, 'Affordable Domains', 'Automatic shortlist'):
             shortlist_rows = []
             for candidate in candidates:
                 checked_at = pd.to_datetime(candidate.get('Checked at'), errors='coerce', utc=True)
                 shortlist_rows.append({
+                    'Rank': candidate['Rank'],
                     'Candidate name': candidate['Name'],
                     'Current decision': 'Investigate' if candidate['Decision'] == 'Maybe' else candidate['Decision'],
+                    'Automatic recommendation': candidate['Automatic recommendation'],
+                    'Recommendation': candidate['Recommendation'],
+                    'Recommendation reason': candidate['Recommendation reason'],
+                    'Ranking reason': candidate['Ranking reason'],
                     'Automatic conflict assessment': candidate.get(
                         'Automatic conflict assessment', candidate.get('Conflict assessment', 'Unknown')),
                     '.com registration status': candidate.get('Domain status', 'Unknown'),
@@ -446,8 +457,10 @@ if rows:
             member_signature = hashlib.sha1(
                 '\0'.join(row['Candidate name'] for row in shortlist_rows).encode('utf-8')
             ).hexdigest()[:12]
-            st.subheader('Shortlist' if filter_name == shortlist_filter else 'Affordable Domains')
-            st.caption('Select a row to open that candidate in Quick Overview below. Sort by any column header.')
+            st.subheader('Shortlist' if filter_name == shortlist_filter else
+                         'Ranked automatic shortlist' if filter_name == 'Automatic shortlist' else 'Affordable Domains')
+            st.caption('Rank reflects the full candidate list. Select a row to open it below; sort by any column header. '
+                       'Automatic recommendations do not change saved decisions.')
             selection = st.dataframe(
                 shortlist_frame,
                 key=project_key('shortlist_table_' + member_signature),
@@ -485,6 +498,7 @@ if rows:
             st.markdown(f'**Saved decision: {decision_label}** · '
                         f'{"Historical automatic choice" if decision_source == "automatic" else "Saved choice"}')
             st.markdown('## ' + name)
+            st.caption(f"Rank {item['Rank']} · Screening recommendation: {item['Recommendation']} · {item['Recommendation reason']}")
             if item['Research refresh warnings']:
                 st.warning(item['Research refresh warnings'])
             links = candidate_links(p, name)
@@ -540,8 +554,10 @@ if rows:
             else:
                 st.info('Quick assessment: use Google and the registrar, then choose Keep, Investigate or Discard.')
             with st.expander('Detailed results · evidence, links and scoring', expanded=False):
-                st.write('**Automatic recommendation:**', item.get('Recommendation', 'Unknown'))
+                st.write('**Screening recommendation (including any manual conflict override):**', item.get('Recommendation', 'Unknown'))
+                st.write('**Automatic recommendation (before conflict override):**', item.get('Automatic recommendation', 'Unknown'))
                 st.write('**Why:**', item.get('Recommendation reason') or 'No reason recorded')
+                st.write('**Ranking:**', item.get('Ranking reason') or 'Not ranked')
                 st.write('**Research completeness:**', research_engine)
                 st.write('**Domain record:**', domain_engine)
                 st.write('**Automatic conflict assessment:**', conflict_engine)
@@ -619,13 +635,13 @@ if show_management:
                     evidence_by_name.setdefault(evidence_row['name'].casefold(), []).append(evidence_row)
             shown = [r for r in rows if not filter_text or filter_text.casefold() in
                      (json.dumps(r, ensure_ascii=False) + json.dumps(evidence_by_name.get(r['Name'].casefold(), {}), ensure_ascii=False)).casefold()]
-            table = pd.DataFrame(shown, columns=list(rows[0]))[['Rank', 'Name', 'Universal score', 'Recommendation', 'Domain status', 'Conflict assessment', 'Overlap leads', 'Ranking confidence', 'Project points', 'Next action', 'Brand fit score', 'Decision', 'Research']]
+            table = pd.DataFrame(shown, columns=list(rows[0]))[['Rank', 'Name', 'Universal score', 'Brand priority points', 'Recommendation', 'Recommendation reason', 'Domain status', 'Domain eligibility', 'Conflict assessment', 'Overlap leads', 'Ranking confidence', 'Project points', 'Next action', 'Brand fit score', 'Decision', 'Research']]
             show_all = st.checkbox('Show all candidates', key='show_all_' + p['id'])
             st.dataframe(table if show_all else table.head(5), hide_index=True, width='stretch')
             st.caption(f"Showing {len(table) if show_all else min(5, len(table))} of {len(table)} matching candidates for {p['title']}.")
-            st.caption('Rank: shortlist / investigate / reject, then universal evidence score, project checks and your brand-fit ratings. Recommendations are derived from evidence, not given extra points. Scores are screening judgments, not availability probabilities.')
+            st.caption('Rank: shortlist / investigate / reject, then evidence score, business-name priority, optional project checks, brand-fit score and name. Scores are screening judgments, not availability probabilities.')
             with st.expander('How ranking works'):
-                st.write('Domain: confirmed / owned 30, no registry record 20, registered or unknown 0. Conflict assessment: little evidence in completed searches 35, possible overlap 15, strong conflict or insufficient evidence 0. Coverage: up to 15 for completed required checks. Universal score comes before all selected-platform points. Strong conflicts receive a Reject recommendation; incomplete research receives Investigate. Neither changes your saved decision. An automatic conflict is a screening lead, not trademark clearance.')
+                st.write('Domain: verified eligible 30, provisional promising 20, unresolved but potentially available 10, registered or over budget 0. Conflict: little evidence 35, possible overlap 15, strong or insufficient evidence 0. Coverage: up to 15 for completed required checks. Business-name priority uses your four completed ratings when available; otherwise simple length, formatting, non-generic-token and prospecting/research-term signals, each worth up to 5. These are proxies, not proof of quality. Strong conflict leads receive a Reject recommendation; missing research or unknown, stale or failed pricing requires investigation. Provisional quotes may be shortlisted but require final price verification. Manual conflict overrides affect the recommendation; saved decisions never change automatically. Leads are not trademark clearance.')
         else:
             st.info('Add candidate names below to build this project’s ranking.')
     st.divider()

@@ -4,6 +4,36 @@ from urllib.parse import urlparse
 
 CONFLICT_OPTIONS = ['Use automatic assessment', 'Strong conflict', 'Possible overlap', 'Little evidence']
 
+_B2B_TERMS = {'business', 'company', 'companies', 'lead', 'leads', 'prospect', 'prospects',
+              'prospecting', 'research', 'sales', 'market', 'markets', 'insight', 'insights',
+              'data', 'account', 'accounts'}
+_GENERIC_TERMS = _B2B_TERMS | {'app', 'finder', 'find', 'platform', 'search', 'service',
+                               'services', 'software', 'solution', 'solutions', 'system',
+                               'systems', 'tech', 'technology', 'tool', 'tools'}
+
+
+def brand_priority(project, name, review):
+    """Return transparent business-name ordering signals, not claims about brand quality."""
+    from engine import RATING_FIELDS, rating_score
+    if project.get('platform') != 'Business / other':
+        return 0, 'Business-name signals not applied to this project.'
+    rating = rating_score(review)
+    if rating is not None:
+        detail = ', '.join(f'{field} {review[field]}/5' for field in RATING_FIELDS)
+        return rating // 5, 'User ratings: ' + detail + '.'
+    separated = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
+    separated = re.sub(r'([A-Z])([A-Z][a-z])', r'\1 \2', separated)
+    tokens = re.findall(r'[^\W_]+', separated.casefold(), flags=re.UNICODE)
+    length = sum(character.isalnum() for character in name)
+    length_points = 5 if 5 <= length <= 18 else 2 if 19 <= length <= 24 else 0
+    format_points = 5 if re.fullmatch(r'[^\W\d_]+(?:[ -][^\W\d_]+)*', name.strip(), flags=re.UNICODE) else 0
+    distinctive_points = 5 if any(token not in _GENERIC_TERMS and token.isalpha() for token in tokens) else 0
+    topic_points = 5 if any(token in _B2B_TERMS for token in tokens) else 0
+    detail = (f'Unrated name-format signals: length {length_points}/5, simple formatting {format_points}/5, '
+              f'non-generic token {distinctive_points}/5, prospecting/research term {topic_points}/5. '
+              'These are proxies, not proof of memorability, distinctiveness or suitability.')
+    return length_points + format_points + distinctive_points + topic_points, detail
+
 
 def default_profile(platform):
     business = platform == 'Business / other'
@@ -81,7 +111,7 @@ def assess(project, name, row):
     # Industry searches from a different profile cannot establish present-day conflicts.
     industry_current = checks.get('Industry search', {}).get('profile_terms', (row or {}).get('profile', {}).get('terms')) == profile['terms']
     terms = [x.strip().casefold() for x in profile['terms'].split(',') if x.strip()]
-    evidence, seen = [], set()
+    evidence, seen = [], {}
     sources = ['Google', 'Google broad', 'Industry search']
     if profile['youtube']:
         sources.append('YouTube')
@@ -98,20 +128,28 @@ def assess(project, name, row):
             if kind == 'Review relevance':
                 continue
             identity = canonical_url(url) or normalize(title)
-            if identity in seen:
-                continue
-            seen.add(identity)
             text = (title + ' ' + description).casefold()
             context = [t for t in terms if re.search(r'(?<!\w)' + re.escape(t) + r'(?!\w)', text)]
-            path = urlparse(url).path.rstrip('/')
+            parsed_url = urlparse(url)
+            path = parsed_url.path.rstrip('/')
             # A matching brand title with relevant industry language on a homepage,
             # app/podcast listing or selected YouTube channel is a stronger lead.
             entity_page = source in ('YouTube', 'Apple Podcasts') or path in ('', '/about', '/about-us') or '/app/' in path or 'play.google.com/store/apps' in url
             strong = (kind in ('Exact title', 'Name in title') and brand_identity(name, title, url)
-                      and bool(context) and entity_page)
-            evidence.append({'source': source, 'title': title, 'description': description, 'url': url,
-                             'match': kind, 'matched_fields': hit_fields, 'context': ', '.join(context),
-                             'assessment': 'Strong conflict lead' if strong else 'Possible overlap'})
+                      and bool(context) and entity_page and parsed_url.scheme in ('http', 'https')
+                      and bool(parsed_url.netloc) and checks[source].get('status') == 'Completed'
+                      and not checks[source].get('details_error'))
+            lead = {'source': source, 'title': title, 'description': description, 'url': url,
+                    'match': kind, 'matched_fields': hit_fields, 'context': ', '.join(context),
+                    'assessment': 'Strong conflict lead' if strong else 'Possible overlap'}
+            if identity in seen:
+                if strong:
+                    index = seen[identity]
+                    if evidence[index]['assessment'] != 'Strong conflict lead':
+                        evidence[index] = lead
+                continue
+            seen[identity] = len(evidence)
+            evidence.append(lead)
     strong = [m for m in evidence if m['assessment'] == 'Strong conflict lead']
     web_complete = all(x in completed for x in ['Google', 'Google broad', 'Industry search'])
     automatic = 'Strong conflict' if strong else 'Possible overlap' if evidence else 'Little evidence' if web_complete else 'Insufficient evidence'
@@ -150,6 +188,7 @@ def assess(project, name, row):
     fields['Podcast points'] = 5 if profile['podcasts'] and apple.get('status') == 'Completed' and not podcast_hits else 0
     fields['Project points'] = sum(fields[p + ' points'] for p in ('YouTube', 'Gmail', 'Facebook', 'TikTok', 'Instagram')) + fields['Podcast points']
     fields['Priority score'] = fields['Universal score'] + fields['Project points']
+    fields['Brand priority points'], fields['Brand priority basis'] = brand_priority(project, name, review)
     fields['YouTube tier'] = 3 if yt in available else 2 if yt == 'No match in sample' else 0 if yt in ('Conflict found', 'Name conflict found') else 1
     fields['Gmail tier'] = 2 if gm in available else 0 if gm in ('Conflict found', 'Invalid Gmail username') else 1
     fields['Web conflict penalty'] = 0  # Retained for compatibility; conflicts now have their own component.
@@ -167,20 +206,25 @@ def assess(project, name, row):
         failure['source'] + ': latest attempt ' + failure['checked_at'] + ' — ' + failure['message']
         + (' Retained evidence: ' + failure['evidence_checked_at'] + '.' if failure['evidence_checked_at'] else '')
         for failure in (row or {}).get('refresh_failures', []))
-    if conflict == 'Strong conflict':
-        recommendation = 'Reject'
-        reason = 'Strong competing-brand lead in the selected context; inspect the linked evidence before a final decision.'
-    elif (conflict in ('Possible overlap', 'Insufficient evidence') or missing
-          or domain not in available | {'Potentially available'} or eligibility not in ('Eligible', 'Promising')):
-        recommendation = 'Investigate'
-        reason = ('Resolve overlap or incomplete research.' if missing or conflict != 'Little evidence'
-                  else pricing['Verification needed'])
-    else:
-        recommendation = 'Shortlist'
-        reason = 'Little competing-name evidence in completed samples. ' + pricing['Verification needed']
+    def recommendation_for(conflict_value, manual=False):
+        if conflict_value == 'Strong conflict':
+            return ('Reject', 'Manual conflict assessment: strong conflict; review the saved evidence before a final decision.'
+                    if manual else 'Strong competing-brand lead in the selected context; inspect the linked evidence before a final decision.')
+        if (conflict_value in ('Possible overlap', 'Insufficient evidence') or missing
+                or domain not in available | {'Potentially available'} or eligibility not in ('Eligible', 'Promising')):
+            return ('Investigate', 'Resolve overlap or incomplete research.' if missing or conflict_value != 'Little evidence'
+                    else pricing['Verification needed'])
+        return 'Shortlist', 'Little competing-name evidence in completed samples. ' + pricing['Verification needed']
+
+    fields['Automatic recommendation'] = recommendation_for(automatic)[0]
+    recommendation, reason = recommendation_for(conflict, manual=override == 'Strong conflict')
     fields['Recommendation'] = recommendation
     fields['Recommendation reason'] = reason
-    fields['Ranking reason'] = f'Domain {fields["Domain points"]}/30; conflict {fields["Conflict points"]}/35; coverage {fields["Coverage points"]}/15; project {fields["Project points"]}/20. {reason}'
+    fields['Ranking reason'] = (f'{recommendation}; evidence {fields["Universal score"]}/80 '
+                                f'(domain {fields["Domain points"]}/30, conflict {fields["Conflict points"]}/35, '
+                                f'coverage {fields["Coverage points"]}/15); business-name priority '
+                                f'{fields["Brand priority points"]}/20; optional project points {fields["Project points"]}. '
+                                f'{fields["Brand priority basis"]} {reason}')
     if strong and conflict == 'Strong conflict':
         action = 'Review strongest conflict: ' + strong[0]['title']
     elif missing:

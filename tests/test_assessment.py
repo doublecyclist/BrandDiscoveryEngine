@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 import requests
 import engine as e
 import domain_pricing as dp
-from assessment import default_profile, profile_for
+from assessment import brand_priority, default_profile, profile_for
 from research_queue import plan_research, research_state
 
 
@@ -123,6 +123,83 @@ class AssessmentTests(unittest.TestCase):
         self.assertEqual(result['Overlap leads'],1) # three searches, one unique page
         m['url']='https://news.example/story/1';m['description']='A person called Banker Beacon'
         self.assertEqual(e.export_rows(p)[0]['Conflict assessment'],'Possible overlap')
+
+    def test_strong_conflict_requires_linked_completed_evidence_and_preserves_decision(self):
+        lead = {'title': 'Banker Beacon', 'description': 'Commercial banking software', 'url': 'https://bankerbeacon.example/'}
+        p, row = self.fixture(matches=[lead])
+        p['reviews']['banker beacon'] = {'decision': 'Keep', 'decision_source': 'manual'}
+        before = deepcopy(p)
+        assessed = e.export_rows(p)[0]
+        self.assertEqual(assessed['Automatic recommendation'], 'Reject')
+        self.assertEqual(assessed['Recommendation'], 'Reject')
+        self.assertEqual(assessed['Decision'], 'Keep')
+        self.assertEqual(p, before)
+        for check in row['checks']:
+            check['matches'][0]['url'] = ''
+        assessed = e.export_rows(p)[0]
+        self.assertEqual(assessed['Automatic conflict assessment'], 'Possible overlap')
+        self.assertEqual(assessed['Automatic recommendation'], 'Investigate')
+        for check in row['checks']:
+            check['matches'][0]['url'] = 'https://bankerbeacon.example/'
+            check['status'] = 'Failed'
+        assessed = e.export_rows(p)[0]
+        self.assertNotEqual(assessed['Automatic recommendation'], 'Reject')
+
+    def test_stronger_duplicate_evidence_is_not_hidden_by_weaker_result(self):
+        p, row = self.fixture()
+        row['checks'][0]['matches'] = [{'title': 'Banker Beacon', 'description': 'Unrelated hobby',
+                                        'url': 'https://bankerbeacon.example/'}]
+        row['checks'][1]['matches'] = [{'title': 'Banker Beacon', 'description': 'Banking software',
+                                        'url': 'https://bankerbeacon.example/'}]
+        result = e.export_rows(p)[0]
+        self.assertEqual(result['Automatic recommendation'], 'Reject')
+        self.assertEqual(result['Relevant conflict leads'], 1)
+
+    def test_business_name_signals_and_user_ratings_rank_eligible_candidates(self):
+        p, row = self.fixture('Data Research')
+        p['names'].append('Velora Research')
+        other = deepcopy(row)
+        other['name'] = 'Velora Research'
+        other['targets'] = e.default_targets(other['name'])
+        other['registration']['domain'] = 'veloraresearch.com'
+        p['runs'][0]['results'].append(other)
+        p['domain_pricing'] = {}
+        for name in p['names']:
+            domain = e.slug(name) + '.com'
+            p['domain_pricing'][domain] = dp.observed_quote(
+                domain, 'Available', False, '40', '120', 'Offline listing', total_verified=True)
+        before = deepcopy(p)
+        ranked = e.export_rows(p)
+        self.assertEqual([r['Name'] for r in ranked], ['Velora Research', 'Data Research'])
+        self.assertTrue(all(r['Recommendation'] == 'Shortlist' for r in ranked))
+        self.assertGreater(ranked[0]['Brand priority points'], ranked[1]['Brand priority points'])
+        self.assertIn('proxies, not proof', ranked[0]['Brand priority basis'])
+        self.assertIn('business-name priority', ranked[0]['Ranking reason'])
+        self.assertEqual(p, before)
+        p['reviews'] = {
+            'data research': {field: 5 for field in e.RATING_FIELDS},
+            'velora research': {field: 1 for field in e.RATING_FIELDS},
+        }
+        ranked = e.export_rows(p)
+        self.assertEqual([r['Name'] for r in ranked], ['Data Research', 'Velora Research'])
+        self.assertIn('User ratings:', ranked[0]['Brand priority basis'])
+        p['domain_pricing']['dataresearch.com']['acquisition_price'] = '101'
+        ranked = e.export_rows(p)
+        self.assertEqual(ranked[0]['Name'], 'Velora Research')
+        self.assertEqual(ranked[1]['Recommendation'], 'Investigate')
+
+    def test_name_signals_are_explained_for_camel_case_and_incomplete_ratings(self):
+        project = e.new_project('Business names')
+        project['platform'] = 'Business / other'
+        generic, generic_reason = brand_priority(project, 'DataResearch', {})
+        distinctive, reason = brand_priority(project, 'VeloraResearch', {'Memorability': 5})
+        self.assertGreater(distinctive, generic)
+        self.assertIn('non-generic token 0/5', generic_reason)
+        self.assertIn('prospecting/research term 5/5', reason)
+        self.assertIn('Unrated', reason)
+        self.assertLess(brand_priority(project, 'Velora123!', {})[0], distinctive)
+        project['platform'] = 'Podcast'
+        self.assertEqual(brand_priority(project, 'VeloraResearch', {})[0], 0)
 
     def test_harborsketch_coincidental_phrase_is_not_a_strong_conflict(self):
         for title, expected in (
@@ -253,6 +330,7 @@ class AssessmentTests(unittest.TestCase):
         p['reviews']['banker beacon']={'conflict_assessment':'Little evidence','conflict_evidence':'My own existing company'}
         r=e.export_rows(p)[0]
         self.assertEqual(r['Automatic conflict assessment'],'Strong conflict')
+        self.assertEqual(r['Automatic recommendation'],'Reject')
         self.assertEqual(r['Conflict assessment'],'Little evidence')
         self.assertEqual(r['Recommendation'],'Investigate')
         self.assertIn('My own existing company',r['Assessment basis'])

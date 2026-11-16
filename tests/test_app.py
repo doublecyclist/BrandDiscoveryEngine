@@ -7,6 +7,7 @@ from unittest.mock import patch
 from streamlit.testing.v1 import AppTest
 
 import engine
+import domain_pricing
 from assessment import profile_for
 
 
@@ -115,7 +116,8 @@ class AppDecisionTests(unittest.TestCase):
             'To review': '0', 'Keep': '0', 'Investigate': '59', 'Discard': '91',
         })
         self.assertEqual(list(table.value.columns), [
-            'Candidate name', 'Current decision', 'Automatic conflict assessment',
+            'Rank', 'Candidate name', 'Current decision', 'Automatic recommendation', 'Recommendation',
+            'Recommendation reason', 'Ranking reason', 'Automatic conflict assessment',
             '.com registration status', 'Research completeness', 'Last research date',
             'Domain name', 'Registration availability', 'Premium status', 'Acquisition price (USD)',
             'Annual renewal price (USD)', 'Budget classification', 'Price-check date', 'Pricing source',
@@ -130,6 +132,52 @@ class AppDecisionTests(unittest.TestCase):
         app.session_state[table.key] = {'selection': {'rows': [1]}}
         app = app.run(timeout=30)
         self.assertEqual(self.matching_names(app), [selected_name])
+
+    def test_ranked_automatic_shortlist_and_budget_counts_update_together(self):
+        project = self.fixture_project()
+        project['reviews']['quiet beacon'] = {'decision': 'Keep', 'decision_source': 'manual'}
+        project['domain_pricing'] = {'quietbeacon.com': domain_pricing.observed_quote(
+            'quietbeacon.com', 'Available', False, '40', '150', 'Offline listing', total_verified=True)}
+        engine.save_project(project)
+        path = self.root / (project['id'] + '.json')
+        app = self.launch()
+        app = next(item for item in app.selectbox if item.label == 'Show names').set_value('Automatic shortlist').run(timeout=10)
+        table = self.shortlist_table(app).value
+        self.assertEqual(list(table['Candidate name']), ['Quiet Beacon'])
+        self.assertEqual(list(table['Rank']), [1])
+        self.assertEqual(list(table['Recommendation']), ['Shortlist'])
+        self.assertTrue(table.iloc[0]['Recommendation reason'])
+        self.assertTrue(table.iloc[0]['Ranking reason'])
+        self.assertEqual(self.metric_values(app), {'To review': '2', 'Keep': '1', 'Investigate': '0', 'Discard': '0'})
+        self.assertTrue(any('Decision counts below cover all candidates' in item.value for item in app.caption))
+        app = next(item for item in app.number_input if item.label == 'Maximum domain acquisition price (USD)').set_value(30.0).run(timeout=10)
+        self.assertFalse(app.exception)
+        self.assertFalse(any('Candidate name' in item.value.columns for item in app.dataframe))
+        self.assertTrue(any('0 of 3 names match this view' in item.value for item in app.markdown))
+        self.assertEqual(self.metric_values(app), {'To review': '2', 'Keep': '1', 'Investigate': '0', 'Discard': '0'})
+        saved = engine.load_project(path)
+        self.assertEqual(saved['reviews'], project['reviews'])
+        self.assertEqual(saved['runs'], project['runs'])
+        self.assertEqual(saved['domain_pricing'], project['domain_pricing'])
+
+    def test_automatic_filters_distinguish_manual_conflict_override(self):
+        project = self.fixture_project()
+        project['reviews']['strong beacon'] = {'decision': 'Keep', 'decision_source': 'manual',
+                                               'conflict_assessment': 'Little evidence',
+                                               'conflict_evidence': 'Reviewed offline'}
+        project['domain_pricing'] = {'strongbeacon.com': domain_pricing.observed_quote(
+            'strongbeacon.com', 'Available', False, '40', '20', 'Offline listing', total_verified=True)}
+        engine.save_project(project)
+        path = self.root / (project['id'] + '.json')
+        before = path.read_bytes()
+        app = self.launch()
+        app = next(item for item in app.selectbox if item.label == 'Show names').set_value('Automatic shortlist').run(timeout=10)
+        self.assertEqual(self.matching_names(app), [])
+        self.assertTrue(any('0 of 3 names match this view' in item.value for item in app.markdown))
+        app = next(item for item in app.selectbox if item.label == 'Show names').set_value('Automatic rejects').run(timeout=10)
+        self.assertEqual(self.matching_names(app), ['Strong Beacon'])
+        self.assertTrue(any('1 of 3 names match this view' in item.value for item in app.markdown))
+        self.assertEqual(path.read_bytes(), before)
 
     def test_manual_shortlist_changes_are_immediate_and_persist_without_research(self):
         project = self.fixture_project()

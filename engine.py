@@ -776,7 +776,8 @@ def export_rows(project):
                      'Checked at': row['checked_at'] if row else '', **{k: review.get(k) for k in RATING_FIELDS},
                      **search_links(name), **ranking_fields(project, name, row),
                      **pricing_fields(project, name, research_row=row)})
-    rows.sort(key=lambda r: ({'Shortlist': 0, 'Investigate': 1, 'Reject': 2}[r['Recommendation']], -r['Universal score'], -r['Project points'],
+    rows.sort(key=lambda r: ({'Shortlist': 0, 'Investigate': 1, 'Reject': 2}[r['Recommendation']],
+                             -r['Universal score'], -r['Brand priority points'], -r['Project points'],
                              -(r['Brand fit score'] or 0), r['Name'].casefold()))
     for i, row in enumerate(rows, 1):
         row['Rank'] = i
@@ -952,7 +953,8 @@ def merge_candidate_csv(project, content):
 def workbook_data(project):
     """Flat, key-free data for the full workbook, including all saved runs."""
     ranks = export_rows(project)
-    leading = ['Rank', 'Name', 'Universal score', 'Recommendation', 'Domain status', 'Conflict assessment',
+    leading = ['Rank', 'Name', 'Universal score', 'Brand priority points', 'Brand priority basis',
+               'Automatic recommendation', 'Recommendation', 'Recommendation reason', 'Domain status', 'Domain eligibility', 'Conflict assessment',
                'Competing names', 'Ranking confidence', 'Incomplete checks', 'Project points', 'Priority score', 'YouTube status', 'Gmail status',
                'Facebook status', 'TikTok status', 'Instagram status', 'Domain status', 'Next action', 'Ranking reason',
                'Brand fit score', 'Decision']
@@ -999,10 +1001,11 @@ def workbook_data(project):
         {'Item': 'Audience', 'Details': project.get('audience', '')},
         {'Item': 'Project profile', 'Details': json.dumps(profile_for(project), ensure_ascii=False)},
         {'Item': 'Exported at (UTC)', 'Details': now()},
-        {'Item': 'Ranking order', 'Details': 'Shortlist / Investigate / Reject first, then Universal score, project checks, brand fit, and name. Recommendation is derived from evidence and earns no separate points. Rank is a snapshot; re-export after changing reviews.'},
-        {'Item': 'Universal score (80)', 'Details': 'Domain: confirmed/owned 30, no registry record 20, registered/failed/unknown 0. Conflicts: little evidence in completed samples 35, possible overlap 15, strong or insufficient evidence 0. Coverage: fraction of completed required checks times 15.'},
+        {'Item': 'Ranking order', 'Details': 'Screening recommendation first, then universal evidence score, business-name priority, optional project checks, brand-fit score, and name. Priority score is the legacy universal-plus-project total, not the sort key. Rank is a snapshot.'},
+        {'Item': 'Universal score (80)', 'Details': 'Domain: fresh verified eligible 30, provisional promising 20, unresolved but potentially available 10, registered or over budget 0. Conflicts: little evidence 35, possible overlap 15, strong or insufficient evidence 0. Coverage: completed required checks times 15.'},
+        {'Item': 'Business-name priority (20)', 'Details': 'Four completed user ratings take precedence. Otherwise length, simple formatting, a non-generic token, and a prospecting/research term each contribute up to 5. These surface signals are proxies, not evidence of suitability, memorability or trademark distinctiveness.'},
         {'Item': 'Project score (up to 20)', 'Details': 'Selected YouTube 8 confirmed or 4 no-match; Gmail 4 confirmed; each selected social platform 1 confirmed or 0.5 no-match; Apple Podcasts 5 for a completed sample without title overlap. Core score always sorts ahead of these points.'},
-        {'Item': 'Conflict rules', 'Details': 'Screening rules match names in titles, descriptions, handles and URLs. Relevant topic terms on a matching brand homepage, selected channel, app or podcast listing produce a strong conflict lead. Other matching evidence produces possible overlap. These are heuristic leads, not legal conclusions.'},
+        {'Item': 'Conflict rules', 'Details': 'A completed search, matching business identity, relevant topic terms and a linked brand homepage, channel, app or podcast listing produce a strong conflict lead and automatic Reject. Other matching evidence is a possible overlap. Manual conflict overrides change the screening recommendation but never erase the automatic one or saved decisions. Leads are not legal conclusions.'},
         {'Item': 'Completeness', 'Details': 'Required: exact Google, broad Google, industry Google, domain registry; plus selected YouTube title/handle and Apple Podcast checks. Missing keys, errors and stale industry/target checks lower confidence. Optional social failures remain visible in Checks.'},
         {'Item': 'Domain', 'Details': 'RDAP registry lookup is separate from DNS. Registered means a matching registry domain record. Potentially available means a structured registry 404, not a sale guarantee; verify eligibility, reservations and price at a registrar.'},
         {'Item': 'Old runs', 'Details': 'Older data is retained and reclassified. Run research again for registration records and project industry searches; fields never collected cannot be reconstructed.'},
