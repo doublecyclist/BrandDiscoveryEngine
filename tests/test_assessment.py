@@ -50,6 +50,29 @@ class AssessmentTests(unittest.TestCase):
                 self.assertEqual(row['Annual renewal price (USD)'], float(renewal))
         self.assertEqual(p['reviews']['banker beacon']['decision'], 'Keep')
 
+    def test_positive_availability_does_not_verify_unknown_stale_or_failed_pricing(self):
+        p, row = self.fixture()
+        p['reviews']['banker beacon'] = {'decision': 'Keep', 'decision_source': 'manual'}
+        domain = 'bankerbeacon.com'
+        good = dp.observed_quote(domain, 'Available', False, '19', '30',
+                                 'Offline fixture', total_verified=True)
+        cases = [
+            ('unknown', {}, {}),
+            ('stale', {domain: dict(good, checked_at='2020-01-01T00:00:00+00:00')}, {}),
+            ('failed', {domain: good}, {domain: {'status': 'Failed', 'error': 'Timeout'}}),
+            ('incomplete', {domain: good}, {domain: {'status': 'Incomplete', 'error': 'Missing total'}}),
+        ]
+        for label, quotes, attempts in cases:
+            with self.subTest(label=label):
+                p['domain_pricing'] = deepcopy(quotes)
+                p['domain_pricing_attempts'] = deepcopy(attempts)
+                assessed = e.export_rows(p)[0]
+                self.assertEqual(assessed['Domain eligibility'], 'Investigate')
+                self.assertNotEqual(assessed['Budget classification'], dp.AFFORDABLE)
+                self.assertEqual(assessed['Recommendation'], 'Investigate')
+                self.assertEqual(assessed['Decision'], 'Keep')
+                self.assertEqual(p['reviews']['banker beacon']['decision'], 'Keep')
+
     def test_registered_without_resale_is_investigate_and_ranks_below_unknown(self):
         p, row = self.fixture(name='Registered Name', domain='Registered')
         p['names'].append('Unknown Name')
