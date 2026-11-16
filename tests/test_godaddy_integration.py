@@ -109,7 +109,7 @@ class GoDaddyIntegrationTests(OfflineTests):
             final = dp.observed_quote('example.com', 'Available', False, price, '20', 'Final total',
                                       total_verified=True)
             self.assertEqual(dp.classification(final), dp.AFFORDABLE)
-        self.assertEqual(dp.classification(final | {'checked_at': '2020-01-01T00:00:00+00:00'}), dp.UNAVAILABLE)
+        self.assertEqual(dp.classification(final | {'checked_at': '2020-01-01T00:00:00+00:00'}), dp.STALE)
 
     @patch('godaddy_pricing.requests.Session.post')
     def test_batch_endpoint_payload_secret_free_records_no_purchase(self, post):
@@ -220,30 +220,98 @@ class GoDaddyIntegrationTests(OfflineTests):
         project['domain_pricing'] = {'example.com': copy.deepcopy(previous)}
         original = copy.deepcopy(project)
         provider = gd.GoDaddyPricing()
-        history = [previous]
         with tempfile.TemporaryDirectory() as root:
             def persist():
                 engine.save_project(project, root)
                 return True
 
-            for response in (result() | {'available': False}, result() | {'prices': []},
-                             result(price=1998)):
+            for response in (result() | {'available': False}, result() | {'prices': []}, result(price=1998)):
                 post.return_value = Mock(status_code=200, headers={},
                                          json=Mock(return_value={'items': [response]}))
                 dp.check_prices(project, ['example.com'], provider, persist)
                 saved = engine.load_project(engine.project_path(project['id'], root))
-                self.assertEqual(saved['domain_pricing_history']['example.com'], history)
                 self.assertEqual(saved['reviews'], original['reviews'])
                 self.assertEqual(saved['runs'], original['runs'])
                 self.assertEqual(saved['names'], original['names'])
                 current = saved['domain_pricing']['example.com']
                 if not response['prices'] or not response['available']:
-                    self.assertIsNone(current['acquisition_price'])
-                    self.assertNotEqual(dp.classification(current), dp.PROVISIONAL)
+                    self.assertEqual(current, previous)
+                    self.assertNotEqual(dp.pricing_fields(saved, 'Example')['Domain eligibility'], 'Eligible')
+                    self.assertNotEqual(dp.pricing_fields(saved, 'Example')['Domain eligibility'], 'Promising')
+                    self.assertNotIn('domain_pricing_history', saved)
                 else:
                     self.assertEqual(current['acquisition_price'], '19.98')
-                history.append(copy.deepcopy(current))
+                    self.assertEqual(saved['domain_pricing_history']['example.com'], [previous])
             self.assertEqual(post.call_count, 3)
+
+    @patch('godaddy_pricing.requests.Session.post')
+    def test_failed_refresh_persists_last_quote_attempt_and_protected_project_data(self, post):
+        project = engine.new_project('Offline refresh')
+        project['names'] = ['Example']
+        project['reviews'] = {'example': {'decision': 'Reject', 'decision_source': 'manual', 'notes': 'retain'}}
+        project['runs'] = [{'id': 'research', 'results': []}]
+        previous = gd.pricing_record('example.com', result(price=2500))
+        project['domain_pricing'] = {'example.com': copy.deepcopy(previous)}
+        project['domain_pricing_history'] = {'example.com': [{'source': 'older quote', 'acquisition_price': '30'}]}
+        before = copy.deepcopy(project)
+        post.return_value = Mock(status_code=429, headers={})
+        with tempfile.TemporaryDirectory() as root:
+            def persist():
+                engine.save_project(project, root)
+                return True
+            with self.assertRaises(dp.PricingError):
+                dp.check_prices(project, ['example.com'], gd.GoDaddyPricing(), persist)
+            saved = engine.load_project(engine.project_path(project['id'], root))
+            for key in ('names', 'reviews', 'runs', 'domain_pricing', 'domain_pricing_history'):
+                self.assertEqual(saved[key], before[key])
+            fields = dp.pricing_fields(saved, 'Example')
+            self.assertEqual(fields['Acquisition price (USD)'], 25)
+            self.assertEqual(fields['Price-check date'], previous['checked_at'])
+            self.assertEqual(fields['Latest refresh status'], 'Failed')
+            self.assertIn('429', fields['Latest refresh error'])
+            self.assertEqual(fields['Domain eligibility'], 'Investigate')
+            self.assertNotEqual(fields['Budget classification'], dp.PROVISIONAL)
+            self.assertEqual(dp.plan_prices(saved, shortlisted=False, provider='GoDaddy')[1], [])
+            self.assertEqual(dp.plan_prices(saved, shortlisted=False, refresh=True, provider='GoDaddy')[1], ['example.com'])
+            self.assertEqual(post.call_count, 1)
+
+    @patch('godaddy_pricing.requests.Session.post')
+    def test_identical_refresh_deduplicates_but_price_change_keeps_old_observation(self, post):
+        project = engine.new_project('Offline history')
+        project['names'] = ['Example']
+        previous = gd.pricing_record('example.com', result(price=2500))
+        previous['checked_at'] = '2020-01-01T00:00:00+00:00'
+        project['domain_pricing'] = {'example.com': previous}
+        provider = gd.GoDaddyPricing()
+        post.return_value = Mock(status_code=200, headers={}, json=Mock(return_value={'items': [result(price=2500)]}))
+        dp.check_prices(project, ['example.com'], provider, lambda: True)
+        self.assertNotIn('domain_pricing_history', project)
+        self.assertNotEqual(project['domain_pricing']['example.com']['checked_at'], previous['checked_at'])
+        self.assertEqual(dp.plan_prices(project, shortlisted=False, provider='GoDaddy')[1], [])
+        latest = copy.deepcopy(project['domain_pricing']['example.com'])
+        post.return_value = Mock(status_code=200, headers={}, json=Mock(return_value={'items': [result(price=2600)]}))
+        dp.check_prices(project, ['example.com'], provider, lambda: True)
+        self.assertEqual(project['domain_pricing_history']['example.com'], [latest])
+        self.assertEqual(project['domain_pricing']['example.com']['acquisition_price'], '26.00')
+        self.assertEqual(post.call_count, 2)
+
+    @patch('godaddy_pricing.requests.Session.post')
+    def test_incomplete_latest_quote_exposes_over_budget_minimum_without_erasing_old_price(self, post):
+        project = engine.new_project('Incomplete premium')
+        project['names'] = ['Example']
+        previous = gd.pricing_record('example.com', result(price=2500))
+        project['domain_pricing'] = {'example.com': copy.deepcopy(previous)}
+        post.return_value = Mock(status_code=200, headers={}, json=Mock(return_value={
+            'items': [result(inventory='PREMIUM', price=10100)]}))
+        dp.check_prices(project, ['example.com'], gd.GoDaddyPricing(), lambda: True)
+        fields = dp.pricing_fields(project, 'Example')
+        self.assertEqual(project['domain_pricing']['example.com'], previous)
+        self.assertEqual(fields['Acquisition price (USD)'], 25)
+        self.assertEqual(fields['Known acquisition minimum (USD)'], 101)
+        self.assertEqual(fields['Budget classification'], dp.OVER_BUDGET)
+        self.assertEqual(fields['Latest refresh status'], 'Incomplete')
+        project['domain_pricing_attempts']['example.com']['checked_at'] = '2020-01-01T00:00:00+00:00'
+        self.assertEqual(dp.pricing_fields(project, 'Example')['Budget classification'], dp.STALE_OVER_BUDGET)
 
     @patch('godaddy_pricing.requests.Session.post')
     def test_partial_batch_failure_keeps_success_and_stops(self, post):

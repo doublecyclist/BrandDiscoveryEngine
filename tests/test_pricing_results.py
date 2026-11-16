@@ -45,7 +45,7 @@ class PricingResultsTests(OfflineTests):
         self.assertEqual(len(rows), 70)
         counts = {view: len(dp.filter_pricing_rows(rows, view)) for view in dp.RESULT_FILTERS}
         self.assertEqual(counts, {'All checked domains': 70, 'Provisional under $100': 16,
-                                  'Verified affordable': 0, 'Over budget': 6,
+                                  'Verified affordable': 0, 'Over budget': 6, 'Stale quotes': 0,
                                   'Unavailable or unknown price': 48})
         provisional = dp.filter_pricing_rows(rows)
         self.assertEqual(provisional[0]['Candidate names'], 'Candidate015')
@@ -85,7 +85,8 @@ class PricingResultsTests(OfflineTests):
                 clock.now.return_value = checked + timedelta(seconds=dp.CACHE_SECONDS)
                 expired_rows = dp.cached_pricing_rows(engine.load_project(path))
                 self.assertEqual(len(dp.filter_pricing_rows(expired_rows)), 0)
-                self.assertEqual(len(dp.filter_pricing_rows(expired_rows, 'Unavailable or unknown price')), 70)
+                self.assertEqual(len(dp.filter_pricing_rows(expired_rows, 'Stale quotes')), 22)
+                self.assertEqual(len(dp.filter_pricing_rows(expired_rows, 'Unavailable or unknown price')), 48)
                 self.assertTrue(all(row['Price reliability'] == 'Stale' for row in expired_rows))
                 self.assertEqual(
                     {row['Domain name']: row['Acquisition price (USD)'] for row in expired_rows},
@@ -104,7 +105,8 @@ class PricingResultsTests(OfflineTests):
         self.assertEqual(len(verified), 1)
         self.assertEqual(verified[0]['Acquisition price (USD)'], 100.0)
         self.assertEqual(verified[0]['Price reliability'], 'Final total verified')
-        self.assertEqual(len(dp.filter_pricing_rows(rows, 'Unavailable or unknown price')), 49)
+        self.assertEqual(len(dp.filter_pricing_rows(rows, 'Stale quotes')), 1)
+        self.assertEqual(len(dp.filter_pricing_rows(rows, 'Unavailable or unknown price')), 48)
         project['domain_budget'] = 50
         self.assertEqual(dp.filter_pricing_rows(dp.cached_pricing_rows(project), 'Verified affordable'), [])
 
@@ -148,7 +150,7 @@ class PricingResultsTests(OfflineTests):
                     self.assertFalse(app.exception)
                     original_bytes = path.read_bytes()
                     view = next(x for x in app.selectbox if x.label == 'Show pricing results')
-                    self.assertEqual(view.value, 'Provisional under $100')
+                    self.assertEqual(view.value, 'All checked domains')
                     pricing_table = next(x for x in app.dataframe if 'Candidate names' in x.value.columns)
                     self.assertEqual(list(pricing_table.proto.column_order)[:3],
                                      ['Candidate names', 'Acquisition price (USD)', 'Budget classification'])
@@ -156,7 +158,7 @@ class PricingResultsTests(OfflineTests):
                     self.assertTrue(json.loads(pricing_table.proto.columns)['Candidate names']['pinned'])
                     def table():
                         return next(x.value for x in app.dataframe if 'Candidate names' in x.value.columns)
-                    self.assertEqual(len(table()), 16)
+                    self.assertEqual(len(table()), 70)
                     self.assertEqual(table().iloc[0]['Acquisition price (USD)'], 15.0)
                     self.assertTrue(any('Checked domains: 70' in x.value for x in app.markdown))
                     app = view.set_value('All checked domains').run()
@@ -230,3 +232,29 @@ class PricingResultsTests(OfflineTests):
         project = engine.new_project('No cached quotes')
         self.assertEqual(dp.cached_pricing_rows(project), [])
         self.assertEqual(dp.filter_pricing_rows([]), [])
+
+    def test_expired_quote_and_failed_refresh_render_without_network(self):
+        project = engine.new_project('Stale display')
+        project['names'] = ['Example']
+        quote = pricing_record('example.com', result(price=1900))
+        quote['checked_at'] = '2020-01-01T00:00:00+00:00'
+        project['domain_pricing'] = {'example.com': quote}
+        project['domain_pricing_attempts'] = {'example.com': {
+            'checked_at': '2020-01-02T00:00:00+00:00', 'provider': 'GoDaddy',
+            'status': 'Failed', 'error': 'Offline fixture failure'}}
+        with tempfile.TemporaryDirectory() as root:
+            engine.save_project(project, root)
+            path = engine.project_path(project['id'], root)
+            before = path.read_bytes()
+            with patch('engine.PROJECTS', Path(root)), patch('engine.DATA', Path(root)), \
+                    patch('engine.migrate_local_projects'), patch('engine.stored_key', return_value=''), \
+                    patch('godaddy_pricing.GoDaddyPricing', side_effect=AssertionError('No provider calls')):
+                app = AppTest.from_file(str(engine.ROOT / 'app.py')).run(timeout=30)
+                self.assertFalse(app.exception)
+                table = next(x.value for x in app.dataframe if 'Candidate names' in x.value.columns)
+                self.assertEqual(len(table), 1)
+                self.assertEqual(table.iloc[0]['Acquisition price (USD)'], 19)
+                self.assertEqual(table.iloc[0]['Latest refresh error'], 'Offline fixture failure')
+                self.assertEqual(table.iloc[0]['Domain eligibility'], 'Investigate')
+                self.assertEqual(table.iloc[0]['Price-check date'], quote['checked_at'])
+                self.assertEqual(path.read_bytes(), before)

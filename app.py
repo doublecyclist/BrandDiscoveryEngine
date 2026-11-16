@@ -22,7 +22,7 @@ from engine import merge_candidate_csv, candidate_links, latest_results
 from research_queue import plan_research, research_state
 from domain_pricing import (AFFORDABLE, PROVISIONAL, RESULT_COLUMNS, RESULT_FILTERS, PricingError, budget_for,
                             cached_pricing_rows, check_prices, filter_pricing_rows, observed_quote,
-                            plan_prices, pricing_fields, pricing_results_csv)
+                            plan_prices, pricing_fields, pricing_results_csv, save_quote)
 from godaddy_pricing import GoDaddyPricing
 from engine import (discover_projects, project_display_label, project_file_path, resume_project_path,
                     save_project_display_name, migrate_local_projects)
@@ -269,7 +269,7 @@ with st.expander('Domain pricing (read-only)', expanded=True):
         p, shortlisted_prices, refresh_prices, provider='GoDaddy')
     st.caption(f'{len(pending_prices)} domains will be checked; '
                f'{len(pricing_domains) - len(pending_prices)} cached results reused. '
-               'Saved prices are fresh for 24 hours; stale quotes do not qualify as Affordable.')
+               'Saved quotes and failed attempts are reused for 24 hours unless explicitly refreshed; stale quotes require verification.')
     st.caption('User-observed listings are authoritative and are never overwritten by API checks. '
                'Reverify/update them using the listing form below.')
     if invalid_prices:
@@ -292,7 +292,9 @@ with st.expander('Domain pricing (read-only)', expanded=True):
                 st.session_state.pricing_warning = (
                     'No reliable acquisition price returned for: ' + ', '.join(unpriced) +
                     '. These domains are not Affordable. See Pricing notes in the shortlist table.')
-            provisional = sum(pricing_fields(p, n)['Budget classification'] == PROVISIONAL for n in p['names'])
+            research_by_name = latest_results(p)
+            provisional = sum(pricing_fields(p, n, research_row=research_by_name.get(n.casefold()))['Budget classification'] == PROVISIONAL
+                              for n in p['names'])
             if provisional:
                 st.session_state.pricing_warning = (
                     st.session_state.get('pricing_warning', '') +
@@ -309,13 +311,14 @@ with st.expander('Domain pricing (read-only)', expanded=True):
              f"Provisional under $100: {pricing_counts['Provisional under $100']} · "
              f"Verified affordable: {pricing_counts['Verified affordable']} · "
              f"Over budget: {pricing_counts['Over budget']} · "
+             f"Stale quotes: {pricing_counts['Stale quotes']} · "
              f"Unavailable or unknown price: {pricing_counts['Unavailable or unknown price']}")
     st.caption('Saved cache only, independent of shortlist decisions and lookup scope. '
                'Provisional totals exclude unverified charges and are not Affordable. '
                'Verified affordable requires a fresh, confirmed final all-in total within your budget. '
-               'Stale or incomplete quotes appear under unavailable or unknown price.')
+               'Stale quotes and failed refreshes retain the last known price and require verification.')
     pricing_view = st.selectbox('Show pricing results', RESULT_FILTERS,
-                                index=RESULT_FILTERS.index('Provisional under $100'),
+                                index=RESULT_FILTERS.index('All checked domains'),
                                 key=project_key('pricing_results_filter'))
     pricing_search = st.text_input('Search pricing results', placeholder='Candidate, domain, or pricing notes',
                                    key=project_key('pricing_results_search'))
@@ -366,17 +369,19 @@ with st.expander('Domain pricing (read-only)', expanded=True):
                                             {'Unknown': None, 'Yes': True, 'No': False}[quote_premium],
                                             quote_price, quote_renewal, quote_source,
                                             total_verified=quote_total_confirm)
-                    previous = p.get('domain_pricing', {}).get(domain)
-                    if previous:
-                        p.setdefault('domain_pricing_history', {}).setdefault(domain, []).append(deepcopy(previous))
-                    p.setdefault('domain_pricing', {})[domain] = record
+                    save_quote(p, domain, record)
+                    p.setdefault('domain_pricing_attempts', {})[domain] = {
+                        'checked_at': record['checked_at'], 'provider': 'User observation',
+                        'status': 'Completed', 'availability': record['availability'],
+                        'quote_returned': record['verified'], 'error': ''}
                     if persist():
                         st.session_state.saved_notice = 'Saved observed domain listing. Brand decisions are unchanged.'
                         st.rerun()
                 except ValueError as exc:
                     st.error(str(exc))
 
-price_rows = {r['Name']: pricing_fields(p, r['Name']) for r in rows}
+research_by_name = latest_results(p)
+price_rows = {r['Name']: pricing_fields(p, r['Name'], research_row=research_by_name.get(r['Name'].casefold())) for r in rows}
 if rows:
     st.caption('Google and registrar first. Your decisions are saved automatically.')
     stats = [sum(r.get('Decision', 'Undecided') == decision for r in rows)
@@ -406,7 +411,7 @@ if rows:
         conflict = str(r.get('Conflict assessment') or '').strip().casefold()
         return (filter_name == 'All' or
                 (filter_name == shortlist_filter and decision in ('Keep', 'Maybe')) or
-                (filter_name == 'Affordable Domains' and price_rows[r['Name']]['Budget classification'] == AFFORDABLE) or
+                (filter_name == 'Affordable Domains' and price_rows[r['Name']]['Domain eligibility'] == 'Eligible') or
                 (filter_name == 'Not reviewed' and decision == 'Undecided') or
                 (filter_name == 'Strong conflicts' and conflict == 'strong conflict') or
                 (filter_name == 'Possible overlaps' and conflict == 'possible overlap') or
@@ -485,12 +490,21 @@ if rows:
             links = candidate_links(p, name)
             price_info = price_rows[name]
             st.caption(f"Domain: {price_info['Domain name']} | {price_info['Budget classification']}")
+            st.caption(f"Status: {price_info['Registration availability']} · "
+                       f"Acquisition: {price_info['Acquisition price (USD)'] if price_info['Acquisition price (USD)'] is not None else 'Unknown'} USD · "
+                       f"Renewal: {price_info['Annual renewal price (USD)'] if price_info['Annual renewal price (USD)'] is not None else 'Unknown'} USD · "
+                       f"{price_info['Price reliability']} · {price_info['Price-check date'] or 'date unknown'} · "
+                       f"{price_info['Pricing source'] or 'source unknown'}")
+            st.caption(price_info['Verification needed'])
+            if price_info['Latest refresh error']:
+                st.warning(f"Latest pricing refresh {price_info['Latest refresh date']}: {price_info['Latest refresh error']}")
             with st.expander('Domain pricing details'):
                 st.dataframe(pd.DataFrame([price_info]), hide_index=True, column_config=PRICE_COLUMNS,
                              alt='Domain registration, premium purchase fees, quoted total and price reliability')
             google, registrar = st.columns(2)
             google.link_button('🔎 Google Search', links['Search name on Google'], width='stretch', type='primary')
-            registrar.link_button('🌐 Registrar Search (.com)', links['Check domain at registrar'], width='stretch', type='primary')
+            registrar.link_button('🌐 Registrar Search (.com)', links['Check domain at registrar'], width='stretch',
+                                  type='primary', disabled=price_info['Domain eligibility'] == 'Not eligible')
             # Overview: concise findings from saved research, not claims of clearance.
             domain_engine = str(item.get('Domain status') or 'Unknown')
             conflict_engine = str(item.get('Automatic conflict assessment') or item.get('Conflict assessment') or 'Unknown')
@@ -520,7 +534,7 @@ if rows:
             elif chosen_conflict == 'Possible conflict':
                 st.info('Quick assessment: investigate the matching business and its industry.')
             elif chosen_domain == 'Registered':
-                st.info('Quick assessment: .com registered. This alone is not grounds for rejection; check ownership or alternative domains.')
+                st.info('Quick assessment: .com registered. This alone is not grounds for rejection; investigate ownership or resale.')
             elif chosen_domain == 'Available at registrar' and chosen_conflict == 'No obvious conflict':
                 st.success('Quick assessment: promising for deeper trademark screening; not yet cleared.')
             else:
