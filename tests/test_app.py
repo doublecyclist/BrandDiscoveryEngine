@@ -4,6 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 import engine
@@ -93,6 +94,143 @@ class AppDecisionTests(unittest.TestCase):
 
     def shortlist_table(self, app):
         return next(item for item in app.dataframe if 'Candidate name' in item.value.columns)
+
+    def test_generate_and_paste_batches_keep_prior_work(self):
+        project = self.fixture_project()
+        project['reviews']['quiet beacon'] = {'decision': 'Keep', 'decision_source': 'manual'}
+        engine.save_project(project)
+        app = self.launch()
+        self.assertEqual(next(x for x in app.radio if x.label == 'Workflow stage').value, 'Generate Names')
+        app = next(x for x in app.text_area if x.label == 'Naming themes or keywords').set_value('Velora Harbor').run()
+        app = next(x for x in app.button if x.label == 'Generate name ideas').click().run()
+        self.assertTrue(any('VeloraHarbor' in x.value and 'HarborVelora' in x.value for x in app.markdown))
+        app = next(x for x in app.text_area if x.label == 'Naming themes or keywords').set_value('Velora').run()
+        app = next(x for x in app.button if x.label == 'Generate name ideas').click().run()
+        self.assertTrue(any('at least two words' in x.value for x in app.error))
+        self.assertFalse(any(x.label == 'Add generated ideas' for x in app.button))
+        app = next(x for x in app.text_area if x.label == 'Naming themes or keywords').set_value('Velora Harbor').run()
+        app = next(x for x in app.button if x.label == 'Generate name ideas').click().run()
+        app = next(x for x in app.button if x.label == 'Add generated ideas').click().run()
+        next(x for x in app.text_area if x.label == 'Paste candidate names').set_value('VeloraHarbor\nMistral Key')
+        app = next(x for x in app.button if x.label == 'Add pasted names').click().run()
+        saved = engine.load_project(self.root / (project['id'] + '.json'))
+        self.assertEqual(saved['names'], project['names'] + ['VeloraHarbor', 'HarborVelora', 'Mistral Key'])
+        self.assertEqual(saved['reviews'], project['reviews'])
+        self.assertEqual(saved['runs'], project['runs'])
+        self.assertFalse(app.exception)
+
+    def test_screen_stage_shows_price_status_conflicts_and_filtered_counts(self):
+        project = self.fixture_project()
+        project['names'].append('New Harbor')
+        verified = domain_pricing.observed_quote('quietbeacon.com', 'Available', False, '40', '120',
+                                                 'Fictional listing', total_verified=True)
+        provisional = domain_pricing.observed_quote('possiblebeacon.com', 'Available', False, '45', '',
+                                                    'Fictional listing')
+        stale = domain_pricing.observed_quote('strongbeacon.com', 'Available', False, '35', '',
+                                              'Fictional listing', total_verified=True)
+        stale['checked_at'] = '2020-01-01T00:00:00+00:00'
+        project['domain_pricing'] = {'quietbeacon.com': verified, 'possiblebeacon.com': provisional,
+                                     'strongbeacon.com': stale}
+        engine.save_project(project)
+        app = self.launch()
+        app = next(x for x in app.radio if x.label == 'Workflow stage').set_value('Screen Names').run()
+        table = next(x.value for x in app.dataframe if 'Automatic conflict' in x.value.columns)
+        indexed = table.set_index('Name')
+        self.assertEqual(indexed.loc['Strong Beacon', 'Automatic conflict'], 'Strong conflict')
+        self.assertIn('Stale', indexed.loc['Strong Beacon', 'Price status'])
+        self.assertIn('Provisional', indexed.loc['Possible Beacon', 'Price status'])
+        self.assertIn('Final total verified', indexed.loc['Quiet Beacon', 'Price status'])
+        self.assertIn('Unknown', indexed.loc['New Harbor', 'Price status'])
+        self.assertNotEqual(indexed.loc['New Harbor', 'Automatic recommendation'], 'Reject')
+        app = next(x for x in app.selectbox if x.label == 'Inspect conflict evidence').set_value('Strong Beacon').run()
+        self.assertTrue(any('Strong competing-brand lead' in x.value for x in app.warning))
+        app = next(x for x in app.text_input if x.label == 'Filter screening names').set_value('quiet').run()
+        table = next(x.value for x in app.dataframe if 'Automatic conflict' in x.value.columns)
+        self.assertEqual(list(table['Name']), ['Quiet Beacon'])
+        self.assertTrue(any('1 of 4 candidates shown' in x.value for x in app.caption))
+        self.assertFalse(app.exception)
+
+    def test_shortlist_stage_saves_each_manual_decision(self):
+        project = self.fixture_project()
+        original_runs = deepcopy(project['runs'])
+        app = self.launch()
+        app = next(x for x in app.radio if x.label == 'Workflow stage').set_value('Build the Shortlist').run()
+        app = next(x for x in app.selectbox if x.label == 'Show shortlist candidates').set_value('All candidates').run()
+        app = next(x for x in app.selectbox if x.label == 'Change decision for').set_value('Quiet Beacon').run()
+        for label, decision in (('Keep', 'Keep'), ('Investigate', 'Maybe'), ('Discard', 'Reject')):
+            app = next(x for x in app.button if x.key == f'workflow_decision_{decision}_{project["id"]}').click().run()
+            saved = engine.load_project(self.root / (project['id'] + '.json'))
+            self.assertEqual(saved['reviews']['quiet beacon']['decision'], decision)
+            self.assertEqual(saved['reviews']['quiet beacon']['decision_source'], 'manual')
+            self.assertEqual(saved['runs'], original_runs)
+            self.assertTrue(any('3 of 3 candidates shown' in x.value for x in app.caption))
+        restarted = self.launch()
+        self.assertEqual(restarted.session_state.project['reviews']['quiet beacon']['decision'], 'Reject')
+        self.assertFalse(restarted.exception)
+
+    def test_finalists_persist_replace_and_keep_original_evidence(self):
+        project = self.fixture_project()
+        project['names'].extend(['Harbor Field', 'Willow Compass', 'Meadow Index'])
+        project['reviews']['quiet beacon'] = {'decision': 'Keep', 'decision_source': 'manual'}
+        project['domain_pricing'] = {'quietbeacon.com': domain_pricing.observed_quote(
+            'quietbeacon.com', 'Available', False, '40', '150', 'Fictional listing', total_verified=True),
+            'possiblebeacon.com': domain_pricing.observed_quote(
+                'possiblebeacon.com', 'Available', False, '50', '', 'Fictional listing'),
+            'strongbeacon.com': domain_pricing.observed_quote(
+                'strongbeacon.com', 'Available', False, '30', '', 'Fictional listing', total_verified=True)}
+        project['domain_pricing']['strongbeacon.com']['checked_at'] = '2020-01-01T00:00:00+00:00'
+        engine.save_project(project)
+        before = deepcopy(project)
+        app = self.launch()
+        app = next(x for x in app.radio if x.label == 'Workflow stage').set_value('Choose the Final Five').run()
+        first = project['names'][:5]
+        next(x for x in app.multiselect if x.label == 'Finalists (maximum five)').set_value(first)
+        app = next(x for x in app.button if x.label == 'Save finalists').click().run()
+        saved = engine.load_project(self.root / (project['id'] + '.json'))
+        self.assertEqual(saved['finalists'], first)
+        report = next(x.value for x in app.dataframe if 'Verified acquisition price (USD)' in x.value.columns)
+        self.assertEqual(report.loc[report['Name'] == 'Quiet Beacon', 'Verified acquisition price (USD)'].iloc[0], 40)
+        self.assertTrue(pd.isna(report.loc[report['Name'] == 'Possible Beacon', 'Verified acquisition price (USD)'].iloc[0]))
+        self.assertTrue(pd.isna(report.loc[report['Name'] == 'Strong Beacon', 'Verified acquisition price (USD)'].iloc[0]))
+        self.assertIn('Strong conflict', report.loc[report['Name'] == 'Strong Beacon', 'Potential conflicts'].iloc[0])
+        self.assertTrue(any('does not provide legal trademark clearance' in x.value for x in app.caption))
+        replacement = first[:4] + [project['names'][5]]
+        next(x for x in app.multiselect if x.label == 'Finalists (maximum five)').set_value(replacement)
+        app = next(x for x in app.button if x.label == 'Save finalists').click().run()
+        saved = engine.load_project(self.root / (project['id'] + '.json'))
+        self.assertEqual(saved['finalists'], replacement)
+        for key in ('names', 'reviews', 'runs', 'domain_pricing'):
+            self.assertEqual(saved[key], before[key])
+        next(x for x in app.multiselect if x.label == 'Finalists (maximum five)').set_value(first)
+        app = next(x for x in app.button if x.label == 'Save finalists').click().run()
+        restarted = self.launch()
+        restarted = next(x for x in restarted.radio if x.label == 'Workflow stage').set_value('Choose the Final Five').run()
+        self.assertEqual(next(x for x in restarted.multiselect if x.label == 'Finalists (maximum five)').value, first)
+        self.assertFalse(restarted.exception)
+
+    def test_finalist_save_conflict_preserves_saved_project_and_working_selection(self):
+        project = self.fixture_project()
+        path = self.root / (project['id'] + '.json')
+        app = self.launch()
+        app = next(x for x in app.radio if x.label == 'Workflow stage').set_value('Choose the Final Five').run()
+        external = engine.load_project(path)
+        external['reviews']['quiet beacon'] = {'decision': 'Keep', 'decision_source': 'manual'}
+        engine.save_project(external)
+        before = path.read_bytes()
+        next(x for x in app.multiselect if x.label == 'Finalists (maximum five)').set_value(['Quiet Beacon'])
+        app = next(x for x in app.button if x.label == 'Save finalists').click().run()
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(app.session_state.project['finalists'], ['Quiet Beacon'])
+        self.assertTrue(any('changed in another session' in x.value for x in app.error))
+        self.assertFalse(app.exception)
+
+    def test_final_report_escapes_spreadsheet_formulas(self):
+        import csv
+        import io
+        from workflow import _report_csv
+        report = _report_csv([{'Name': '=Example', 'Notes': ' +example', 'Price': 40}])
+        row = next(csv.DictReader(io.StringIO(report.decode('utf-8-sig'))))
+        self.assertEqual(row, {'Name': "'=Example", 'Notes': "' +example", 'Price': '40'})
 
     def test_reference_counts_and_selectable_shortlist(self):
         project = engine.new_project('150 candidate shortlist')
