@@ -115,10 +115,12 @@ quotes may omit charges and renewal is separate.
 
 For business projects, completed user ratings for audience fit, memorability,
 clarity and distinctiveness determine business-name priority out of 20.
-Otherwise four transparent surface signals contribute up to 5 each: 5–18
+Otherwise three transparent surface signals contribute up to 5 each: 5–18
 alphanumeric characters (19–24 earns 2), simple letters/spaces/hyphens, at
-least one token outside the built-in generic business-word list, and a
-prospecting/research-related token. CamelCase is split into tokens. These
+least one token outside the built-in generic business-word list. This fallback
+has a maximum of 15 points. The presence or absence of a
+prospecting/research-related token is shown for context but does not award
+points. CamelCase is split into tokens. These
 signals are only ordering proxies: they do not prove professionalism,
 memorability, B2B fit, uniqueness or trademark rights. Other project types
 do not receive these business-specific points. Ratings and saved evidence

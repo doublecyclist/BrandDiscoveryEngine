@@ -195,11 +195,37 @@ class AssessmentTests(unittest.TestCase):
         distinctive, reason = brand_priority(project, 'VeloraResearch', {'Memorability': 5})
         self.assertGreater(distinctive, generic)
         self.assertIn('non-generic token 0/5', generic_reason)
-        self.assertIn('prospecting/research term 5/5', reason)
+        self.assertIn('Prospecting/research term present (not scored)', reason)
         self.assertIn('Unrated', reason)
         self.assertLess(brand_priority(project, 'Velora123!', {})[0], distinctive)
         project['platform'] = 'Podcast'
         self.assertEqual(brand_priority(project, 'VeloraResearch', {})[0], 0)
+
+    def test_keyword_relevance_is_explained_but_does_not_change_ranking(self):
+        p, row = self.fixture('Avena Nova')
+        p['names'].append('Zenda Data')
+        other = deepcopy(row)
+        other['name'] = 'Zenda Data'
+        other['targets'] = e.default_targets(other['name'])
+        other['registration']['domain'] = 'zendadata.com'
+        p['runs'][0]['results'].append(other)
+        p['domain_pricing'] = {}
+        for name in p['names']:
+            domain = e.slug(name) + '.com'
+            p['domain_pricing'][domain] = dp.observed_quote(
+                domain, 'Available', False, '40', '120', 'Offline listing', total_verified=True)
+        before = deepcopy(p)
+        ranked = e.export_rows(p)
+        self.assertEqual([r['Name'] for r in ranked], ['Avena Nova', 'Zenda Data'])
+        self.assertEqual(ranked[0]['Brand priority points'], ranked[1]['Brand priority points'])
+        self.assertIn('Prospecting/research term absent (not scored)', ranked[0]['Brand priority basis'])
+        self.assertIn('Prospecting/research term present (not scored)', ranked[1]['Brand priority basis'])
+        self.assertEqual(p, before)
+
+        ratings = {field: 5 for field in e.RATING_FIELDS}
+        _, reason = brand_priority(p, 'Zenda Data', ratings)
+        self.assertIn('User ratings:', reason)
+        self.assertIn('Prospecting/research term present (not scored)', reason)
 
     def test_harborsketch_coincidental_phrase_is_not_a_strong_conflict(self):
         for title, expected in (

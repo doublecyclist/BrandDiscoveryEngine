@@ -17,22 +17,23 @@ def brand_priority(project, name, review):
     from engine import RATING_FIELDS, rating_score
     if project.get('platform') != 'Business / other':
         return 0, 'Business-name signals not applied to this project.'
-    rating = rating_score(review)
-    if rating is not None:
-        detail = ', '.join(f'{field} {review[field]}/5' for field in RATING_FIELDS)
-        return rating // 5, 'User ratings: ' + detail + '.'
     separated = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
     separated = re.sub(r'([A-Z])([A-Z][a-z])', r'\1 \2', separated)
     tokens = re.findall(r'[^\W_]+', separated.casefold(), flags=re.UNICODE)
+    topic = 'present' if any(token in _B2B_TERMS for token in tokens) else 'absent'
+    topic_detail = f'Prospecting/research term {topic} (not scored).'
+    rating = rating_score(review)
+    if rating is not None:
+        detail = ', '.join(f'{field} {review[field]}/5' for field in RATING_FIELDS)
+        return rating // 5, 'User ratings: ' + detail + '. ' + topic_detail
     length = sum(character.isalnum() for character in name)
     length_points = 5 if 5 <= length <= 18 else 2 if 19 <= length <= 24 else 0
     format_points = 5 if re.fullmatch(r'[^\W\d_]+(?:[ -][^\W\d_]+)*', name.strip(), flags=re.UNICODE) else 0
     distinctive_points = 5 if any(token not in _GENERIC_TERMS and token.isalpha() for token in tokens) else 0
-    topic_points = 5 if any(token in _B2B_TERMS for token in tokens) else 0
     detail = (f'Unrated name-format signals: length {length_points}/5, simple formatting {format_points}/5, '
-              f'non-generic token {distinctive_points}/5, prospecting/research term {topic_points}/5. '
+              f'non-generic token {distinctive_points}/5. {topic_detail} '
               'These are proxies, not proof of memorability, distinctiveness or suitability.')
-    return length_points + format_points + distinctive_points + topic_points, detail
+    return length_points + format_points + distinctive_points, detail
 
 
 def default_profile(platform):
@@ -223,7 +224,7 @@ def assess(project, name, row):
     fields['Ranking reason'] = (f'{recommendation}; evidence {fields["Universal score"]}/80 '
                                 f'(domain {fields["Domain points"]}/30, conflict {fields["Conflict points"]}/35, '
                                 f'coverage {fields["Coverage points"]}/15); business-name priority '
-                                f'{fields["Brand priority points"]}/20; optional project points {fields["Project points"]}. '
+                                f'{fields["Brand priority points"]} points; optional project points {fields["Project points"]}. '
                                 f'{fields["Brand priority basis"]} {reason}')
     if strong and conflict == 'Strong conflict':
         action = 'Review strongest conflict: ' + strong[0]['title']

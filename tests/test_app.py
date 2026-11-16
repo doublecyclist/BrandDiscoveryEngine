@@ -147,7 +147,7 @@ class AppDecisionTests(unittest.TestCase):
         self.assertEqual(list(table['Rank']), [1])
         self.assertEqual(list(table['Recommendation']), ['Shortlist'])
         self.assertTrue(table.iloc[0]['Recommendation reason'])
-        self.assertTrue(table.iloc[0]['Ranking reason'])
+        self.assertIn('Prospecting/research term absent (not scored)', table.iloc[0]['Ranking reason'])
         self.assertEqual(self.metric_values(app), {'To review': '2', 'Keep': '1', 'Investigate': '0', 'Discard': '0'})
         self.assertTrue(any('Decision counts below cover all candidates' in item.value for item in app.caption))
         app = next(item for item in app.number_input if item.label == 'Maximum domain acquisition price (USD)').set_value(30.0).run(timeout=10)
