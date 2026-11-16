@@ -24,12 +24,15 @@ def profile_for(project):
 
 def assess(project, name, row):
     from engine import PLATFORMS, effective_status, targets_for, classify_match, canonical_url, normalize, brand_identity
+    from domain_pricing import pricing_fields, valid_domain
     profile = profile_for(project)
     targets = targets_for(project, name)
     review = project['reviews'].get(name.casefold(), {})
     fields, statuses = {}, {}
     for platform in PLATFORMS:
         status, reason, checked = effective_status(project, name, platform, row)
+        if platform == 'Domain' and not valid_domain(targets['Domain'].strip().lower()):
+            status, reason, checked = 'Not checked', 'Routine screening requires a .com target; historical data remains saved.', ''
         if platform == 'YouTube' and not profile['youtube']:
             status, reason = 'Not selected', 'YouTube is off for this project.'
         if platform == 'Gmail' and not profile['gmail']:
@@ -124,7 +127,16 @@ def assess(project, name, row):
     fields['Overlap leads'] = len(evidence)
     available = {'Confirmed available', 'Owned by me'}
     domain = statuses['Domain']
-    fields['Domain points'] = 30 if domain in available else 20 if domain == 'Potentially available' else 0
+    pricing = pricing_fields(project, name, research_row=row)
+    eligibility = pricing['Domain eligibility']
+    if domain == 'Registered' or pricing['Registration availability'] in ('Registered', 'Unavailable') or eligibility in ('Over budget', 'Not eligible'):
+        fields['Domain points'] = 0
+    elif eligibility == 'Eligible':
+        fields['Domain points'] = 30
+    elif eligibility == 'Promising':
+        fields['Domain points'] = 20
+    else:
+        fields['Domain points'] = 10 if domain in available | {'Potentially available'} else 0
     fields['Conflict points'] = {'Little evidence': 35, 'Possible overlap': 15}.get(conflict, 0)
     fields['Coverage points'] = round(15 * len(completed) / len(required))
     fields['Universal score'] = fields['Domain points'] + fields['Conflict points'] + fields['Coverage points']
@@ -158,12 +170,14 @@ def assess(project, name, row):
     if conflict == 'Strong conflict':
         recommendation = 'Reject'
         reason = 'Strong competing-brand lead in the selected context; inspect the linked evidence before a final decision.'
-    elif conflict in ('Possible overlap', 'Insufficient evidence') or missing or domain not in available | {'Potentially available'}:
+    elif (conflict in ('Possible overlap', 'Insufficient evidence') or missing
+          or domain not in available | {'Potentially available'} or eligibility not in ('Eligible', 'Promising')):
         recommendation = 'Investigate'
-        reason = 'Resolve overlap or incomplete research.' if missing or conflict != 'Little evidence' else 'The proposed domain is registered or not verified; try an alternative domain.'
+        reason = ('Resolve overlap or incomplete research.' if missing or conflict != 'Little evidence'
+                  else pricing['Verification needed'])
     else:
         recommendation = 'Shortlist'
-        reason = 'Little competing-name evidence in completed samples and a viable domain lead. Confirm eligibility and price at a registrar.'
+        reason = 'Little competing-name evidence in completed samples. ' + pricing['Verification needed']
     fields['Recommendation'] = recommendation
     fields['Recommendation reason'] = reason
     fields['Ranking reason'] = f'Domain {fields["Domain points"]}/30; conflict {fields["Conflict points"]}/35; coverage {fields["Coverage points"]}/15; project {fields["Project points"]}/20. {reason}'
@@ -172,7 +186,7 @@ def assess(project, name, row):
     elif missing:
         action = 'Complete ' + missing[0].split(':', 1)[0] + ' — see diagnostics'
     elif domain == 'Registered':
-        action = 'Edit the proposed domain and research again'
+        action = 'Investigate the .com registration and any resale listing'
     elif conflict == 'Possible overlap':
         action = 'Review the linked overlap evidence'
     elif domain == 'Potentially available':

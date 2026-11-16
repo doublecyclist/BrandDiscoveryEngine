@@ -122,7 +122,8 @@ class AppDecisionTests(unittest.TestCase):
             'Pricing notes',
             'Registration price (USD)', 'Premium/resale purchase fee (USD)',
             'Known acquisition minimum (USD)', 'Taxes and mandatory charges', 'Price reliability',
-            'Pricing currency', 'Registrar inventory',
+            'Pricing currency', 'Registrar inventory', 'Latest refresh date', 'Latest refresh source', 'Latest refresh status',
+            'Latest refresh error', 'Domain eligibility', 'Verification needed',
         ])
 
         selected_name = table.value.iloc[1]['Candidate name']

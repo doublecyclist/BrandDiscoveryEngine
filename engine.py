@@ -610,6 +610,7 @@ def research_context(source, targets, profile):
 def research_name(name, youtube_key='', google_key='', podcasts=False, targets=None, social=True, profile=None,
                   *, previous=None, force=False):
     from assessment import default_profile
+    from domain_pricing import valid_domain
     profile = profile or default_profile('YouTube / gaming') | {'podcasts': podcasts, 'social': social}
     targets = targets or default_targets(name)
     previous = previous or {}
@@ -630,10 +631,14 @@ def research_name(name, youtube_key='', google_key='', podcasts=False, targets=N
         target = profile['terms'] if source == 'Industry search' else targets.get(source, '')
         checks.append(collect(source, prior_checks.get(source, {}),
                               lambda: search_check(source, name, key, target)))
+    domain = targets['Domain'].strip().lower()
+    skipped = {'domain': domain, 'status': 'Not checked',
+               'message': 'Routine screening requires a .com target; historical data remains saved.'}
+    dns = collect('Domain DNS', previous.get('dns', {}), lambda: dns_check_domain(domain)) if valid_domain(domain) else skipped.copy()
+    registration = collect('Domain registration', previous.get('registration', {}),
+                           lambda: registration_check(domain)) if valid_domain(domain) else skipped.copy()
     return {'name': name, 'checked_at': now(), 'targets': targets,
-            'dns': collect('Domain DNS', previous.get('dns', {}), lambda: dns_check_domain(targets['Domain'])),
-            'registration': collect('Domain registration', previous.get('registration', {}),
-                                    lambda: registration_check(targets['Domain'])), 'profile': profile,
+            'dns': dns, 'registration': registration, 'profile': profile,
             'youtube_handle': collect('YouTube handle', previous.get('youtube_handle', {}),
                                       lambda: youtube_handle_check(targets['YouTube'], youtube_key)) if profile['youtube'] else {'target': targets['YouTube'], 'status': 'Not selected', 'message': 'YouTube is off for this project.', 'matches': []},
             'gmail': {'target': targets['Gmail'], 'status': 'Manual check required',
@@ -770,7 +775,7 @@ def export_rows(project):
                      'Research': research_summary(row) if row else 'Not checked in latest run',
                      'Checked at': row['checked_at'] if row else '', **{k: review.get(k) for k in RATING_FIELDS},
                      **search_links(name), **ranking_fields(project, name, row),
-                     **pricing_fields(project, name)})
+                     **pricing_fields(project, name, research_row=row)})
     rows.sort(key=lambda r: ({'Shortlist': 0, 'Investigate': 1, 'Reject': 2}[r['Recommendation']], -r['Universal score'], -r['Project points'],
                              -(r['Brand fit score'] or 0), r['Name'].casefold()))
     for i, row in enumerate(rows, 1):

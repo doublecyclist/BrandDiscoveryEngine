@@ -136,8 +136,8 @@ Open **Domain pricing (read-only)** above the existing Quick Overview:
    **GoDaddy v3 batch lookups** using the existing local token. Keep shortlist-only
    checked to limit checks to shortlisted names.
    This does not run research, DNS/RDAP, Google, YouTube or SerpAPI.
-4. Choose **Show names > Affordable Domains** to see only fresh, **final all-in verified** USD
-   acquisition totals at or below your budget (never above $100). This filter
+4. Choose **Show names > Affordable Domains** to see only available `.com` domains with fresh,
+   **final all-in verified** USD acquisition totals at or below your budget (never above $100). This filter
    includes all qualifying candidates, even a manually discarded candidate;
    it does not change any decision. **Shortlist (Keep + Investigate)** remains
    the decision-based view and includes over-budget and unpriced names.
@@ -152,9 +152,10 @@ Open **Domain pricing (read-only)** above the existing Quick Overview:
 the initially expanded pricing section. It displays the active project's saved
 cache without needing a new lookup or switching the brand shortlist view.
 Summary counts are per distinct cached domain, independent of Keep/Investigate/Discard.
-The default **Provisional under $100** view sorts quoted acquisition totals low
-to high (at most $100, subject to a lower project budget). Other views are
-**All checked domains**, **Verified affordable**, **Over budget**, and
+The default **All checked domains** view includes stale and failed-refresh records.
+**Provisional under $100** sorts quoted acquisition totals low to high (at most
+$100, subject to a lower project budget). Other views include **Stale quotes**,
+**Verified affordable**, **Over budget**, and
 **Unavailable or unknown price**. All checked domains puts provisional quotes
 first, then sorts by quoted price; missing prices sort last within each group.
 
@@ -165,9 +166,9 @@ escapes spreadsheet formulas in candidate names and notes. No token is exported.
 Multiple candidates sharing a domain appear together in one row. Cached domains
 no longer matching a current candidate target are retained and marked **not in
 current candidate list**. Stale quotes remain visible but cannot count as affordable
-or provisional under budget. A zero provisional count does not mean saved amounts
-were lost: select **All checked domains** to see historical numeric quotes marked
-**Stale**, including their original dates. Expiry never clears saved price fields.
+or provisional under budget. Quotes previously over budget are labeled as stale
+and over budget at the time of observation, not as current offers. A zero
+provisional count does not mean saved amounts were lost. Expiry never clears saved price fields.
 No search, filter, download or rerun sends an API request.
 
 On an iPad-sized screen, the pricing table puts **Candidate name**, **Quoted total
@@ -184,7 +185,7 @@ such as `1750` (without `$` or commas), registration status and listing source.
 Leave unknown renewal amounts blank. A current structured $1,750 resale asking
 price is **Over budget**, never Affordable, even without a verified tax-inclusive
 total. Saving/reverifying an observed listing retains the previous cached quote
-in `domain_pricing_history`; API refreshes do not overwrite manual listings.
+in `domain_pricing_history` when its substantive details change; API refreshes do not overwrite manual listings.
 No existing notes are automatically converted or datasets modified.
 
 ### Remote access readiness
@@ -204,6 +205,14 @@ its project ID), not its title or the
 size of a previously discussed dataset. The sidebar's **Load selected project**
 switches explicitly; no pricing filter reduces or rewrites the candidate list.
 
+Routine DNS, registry and pricing screening only checks `.com` targets. Historical
+other-extension records remain saved and visible but do not influence eligibility
+or recommendations. A registered `.com` without a resale quote remains Investigate
+and ranks lower; it is never automatically discarded for registration alone.
+Unknown, stale and failed-refresh prices also require investigation. A fresh
+under-budget provisional quote is promising, not a verified checkout total.
+Only the user changes a saved Keep, Investigate or Discard decision.
+
 Availability never proves affordability. Classifications are **Affordable**,
 **Over budget**, **Premium - price unknown**, **Registered - resale unknown**, and
 **Price unavailable**, plus **Provisional - total unverified**. Registration quotes and resale quotes are distinct; a registered
@@ -217,12 +226,15 @@ even when some charges remain unknown. Unavailable domains and incomplete premiu
 quotes cannot be affordable. A premium marketplace listing is shown as registered
 and priced for resale, not available for standard registration.
 
-Quotes and unsuccessful per-domain lookups are saved in the project's optional
-`domain_pricing` map, keyed by domain. A separate `domain_pricing_tariff` caches
+The last usable quote is saved in the optional `domain_pricing` map, keyed by
+domain. `domain_pricing_attempts` records the latest attempt, its date and any
+safe-to-display error. An incomplete result or failed request does not replace
+the last usable quote. A newer unavailable result is shown as the latest status,
+while the prior price remains visible as historical evidence. A separate `domain_pricing_tariff` caches
 Namecheap's account-specific standard `.com` registration/renewal tariffs only.
 GoDaddy never calls that tariff API or substitutes a standard tariff for a resale.
 Old JSON projects
-need no migration. Quotes survive restarts, are reused for 24 hours, and never
+need no migration. Quotes and recent unsuccessful attempts are reused for 24 hours, and never
 trigger requests on reruns or startup. After 24 hours the historical quote remains
 visible but does not qualify as Affordable; explicitly click the button to update it.
 **Refresh cached prices** explicitly rechecks even fresh cached API domains.
@@ -230,9 +242,9 @@ User-observed listings are authoritative and never overwritten by API checks,
 even when stale; use the listing form to reverify/update them.
 API checks replace pricing only, never research or decisions.
 Fresh quotes from another provider are not mistaken for GoDaddy cache entries.
-When an API check replaces a different cached result, the previous result is
-preserved under the optional `domain_pricing_history` field, including refreshes
-from the same provider that return an unknown or unavailable price.
+When substantive quote details change, the previous record is preserved under
+`domain_pricing_history`; repeated identical quotes do not add duplicate history.
+An explicit refresh retries recent failures and incomplete attempts.
 Manual listing overrides stay authoritative.
 Successful batches are saved immediately; failures stop further calls and show an error.
 No candidates, research runs or saved reviews are deleted or rewritten by pricing.

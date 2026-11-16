@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 import requests
 import engine as e
+import domain_pricing as dp
 from assessment import default_profile, profile_for
 from research_queue import plan_research, research_state
 
@@ -22,14 +23,86 @@ class AssessmentTests(unittest.TestCase):
     def test_core_scoring_and_recommendation(self):
         p,row=self.fixture()
         result=e.export_rows(p)[0]
-        self.assertEqual(result['Universal score'],70)
-        self.assertEqual(result['Recommendation'],'Shortlist')
+        self.assertEqual(result['Universal score'],60)
+        self.assertEqual(result['Recommendation'],'Investigate')
         self.assertEqual(result['Project points'],0)
         self.assertEqual(result['Conflict assessment'],'Little evidence')
         row['registration']['status']='Registered'
         result=e.export_rows(p)[0]
         self.assertEqual(result['Domain points'],0)
         self.assertEqual(result['Recommendation'],'Investigate')
+
+    def test_pricing_eligibility_budget_renewal_and_manual_decision(self):
+        p, _ = self.fixture()
+        p['reviews']['banker beacon'] = {'decision': 'Keep', 'decision_source': 'manual'}
+        for price, renewal, verified, eligibility, recommendation in (
+                ('100', '150', True, 'Eligible', 'Shortlist'),
+                ('99', '150', False, 'Promising', 'Shortlist'),
+                ('101', '1', True, 'Over budget', 'Investigate')):
+            with self.subTest(price=price, verified=verified):
+                p['domain_pricing'] = {'bankerbeacon.com': dp.observed_quote(
+                    'bankerbeacon.com', 'Available', False, price, renewal, 'Offline fixture',
+                    total_verified=verified)}
+                row = e.export_rows(p)[0]
+                self.assertEqual(row['Domain eligibility'], eligibility)
+                self.assertEqual(row['Recommendation'], recommendation)
+                self.assertEqual(row['Decision'], 'Keep')
+                self.assertEqual(row['Annual renewal price (USD)'], float(renewal))
+        self.assertEqual(p['reviews']['banker beacon']['decision'], 'Keep')
+
+    def test_positive_availability_does_not_verify_unknown_stale_or_failed_pricing(self):
+        p, row = self.fixture()
+        p['reviews']['banker beacon'] = {'decision': 'Keep', 'decision_source': 'manual'}
+        domain = 'bankerbeacon.com'
+        good = dp.observed_quote(domain, 'Available', False, '19', '30',
+                                 'Offline fixture', total_verified=True)
+        cases = [
+            ('unknown', {}, {}),
+            ('stale', {domain: dict(good, checked_at='2020-01-01T00:00:00+00:00')}, {}),
+            ('failed', {domain: good}, {domain: {'status': 'Failed', 'error': 'Timeout'}}),
+            ('incomplete', {domain: good}, {domain: {'status': 'Incomplete', 'error': 'Missing total'}}),
+        ]
+        for label, quotes, attempts in cases:
+            with self.subTest(label=label):
+                p['domain_pricing'] = deepcopy(quotes)
+                p['domain_pricing_attempts'] = deepcopy(attempts)
+                assessed = e.export_rows(p)[0]
+                self.assertEqual(assessed['Domain eligibility'], 'Investigate')
+                self.assertNotEqual(assessed['Budget classification'], dp.AFFORDABLE)
+                self.assertEqual(assessed['Recommendation'], 'Investigate')
+                self.assertEqual(assessed['Decision'], 'Keep')
+                self.assertEqual(p['reviews']['banker beacon']['decision'], 'Keep')
+
+    def test_registered_without_resale_is_investigate_and_ranks_below_unknown(self):
+        p, row = self.fixture(name='Registered Name', domain='Registered')
+        p['names'].append('Unknown Name')
+        unknown = dict(row, name='Unknown Name', targets=e.default_targets('Unknown Name'),
+                       registration={'domain': 'unknownname.com', 'status': 'Potentially available', 'message': 'Registry evidence'})
+        p['runs'][0]['results'].append(unknown)
+        rows = e.export_rows(p)
+        self.assertEqual([r['Name'] for r in rows], ['Unknown Name', 'Registered Name'])
+        self.assertEqual(rows[1]['Recommendation'], 'Investigate')
+        self.assertEqual(rows[1]['Budget classification'], dp.RESALE_UNKNOWN)
+
+    def test_non_com_history_does_not_drive_or_trigger_screening(self):
+        p, row = self.fixture()
+        p['reviews']['banker beacon'] = {'targets': {'Domain': 'bankerbeacon.net'}, 'decision': 'Keep'}
+        row['targets']['Domain'] = 'bankerbeacon.net'
+        row['registration'] = {'domain': 'bankerbeacon.net', 'status': 'Confirmed available', 'message': 'Historical evidence'}
+        p['domain_pricing'] = {'bankerbeacon.net': dp.observed_quote(
+            'bankerbeacon.com', 'Available', False, '10', '20', 'Offline fixture', total_verified=True)}
+        before = deepcopy(p)
+        exported = e.export_rows(p)[0]
+        self.assertEqual(exported['Domain eligibility'], 'Not eligible')
+        self.assertEqual(exported['Domain points'], 0)
+        self.assertEqual(exported['Recommendation'], 'Investigate')
+        with patch('engine.search_check', return_value={'status': 'Completed', 'matches': []}), \
+                patch('engine.dns_check_domain', side_effect=AssertionError('Non-com DNS lookup')), \
+                patch('engine.registration_check', side_effect=AssertionError('Non-com registry lookup')):
+            researched = e.research_name('Banker Beacon', targets=e.targets_for(p, 'Banker Beacon'),
+                                         profile=profile_for(p))
+        self.assertEqual(researched['registration']['status'], 'Not checked')
+        self.assertEqual(p, before)
 
     def test_failed_or_old_data_never_proves_clear(self):
         p,row=self.fixture(domain='Check failed')
@@ -181,7 +254,7 @@ class AssessmentTests(unittest.TestCase):
         r=e.export_rows(p)[0]
         self.assertEqual(r['Automatic conflict assessment'],'Strong conflict')
         self.assertEqual(r['Conflict assessment'],'Little evidence')
-        self.assertEqual(r['Recommendation'],'Shortlist')
+        self.assertEqual(r['Recommendation'],'Investigate')
         self.assertIn('My own existing company',r['Assessment basis'])
 
     @patch('engine.requests.get')

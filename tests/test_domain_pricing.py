@@ -82,6 +82,25 @@ class PricingTests(OfflineTests):
         return dp.observed_quote('example.com', availability, premium, price, '19.98', 'Test registrar listing',
                                  total_verified=bool(price))
 
+    def test_manual_reobservation_deduplicates_equivalent_amounts(self):
+        project = engine.new_project('Manual history')
+        first = self.quote('15')
+        dp.save_quote(project, 'example.com', first)
+        again = copy.deepcopy(first)
+        again.update(checked_at='2025-01-01T00:00:00+00:00', acquisition_price='15.00')
+        dp.save_quote(project, 'example.com', again)
+        self.assertNotIn('domain_pricing_history', project)
+        changed = copy.deepcopy(again)
+        changed['acquisition_price'] = '16'
+        dp.save_quote(project, 'example.com', changed)
+        self.assertEqual(project['domain_pricing_history']['example.com'], [again])
+        changed['legacy_notes'] = 'Preserve older metadata'
+        replacement = copy.deepcopy(changed)
+        replacement.pop('legacy_notes')
+        dp.save_quote(project, 'example.com', replacement)
+        self.assertEqual(project['domain_pricing_history']['example.com'][-1]['legacy_notes'],
+                         'Preserve older metadata')
+
     def test_exact_budget_boundaries_and_premium(self):
         for price, expected in [('15', dp.AFFORDABLE), ('99', dp.AFFORDABLE), ('100', dp.AFFORDABLE),
                                 ('101', dp.OVER_BUDGET), ('9950', dp.OVER_BUDGET)]:
