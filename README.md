@@ -84,6 +84,48 @@ Run the offline regression suite with:
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
+## Milestone 3: screening and ranked shortlist
+
+The **Automatic shortlist** view shows ranked candidates, the saved decision,
+automatic and current screening recommendations, and the reasons for both
+eligibility and rank. It requires both the automatic and override-aware
+recommendation to be Shortlist; **Automatic rejects** shows automatic rejects
+even when a manual conflict override changes the screening recommendation.
+Decision and research counts above the filter cover all
+candidates; the matching count reflects the selected filter and name search.
+
+A strong automatic conflict lead requires a completed search with a linked
+matching brand identity, relevant industry context and a brand/entity page.
+It produces an automatic **Reject** recommendation. Missing links, incidental
+matches and uncertain overlaps do not establish a strong conflict. These are
+search-based leads, not confirmed trademark conflicts or legal clearance.
+Manual conflict-assessment overrides remain effective and are displayed
+separately from the unmodified automatic recommendation. Neither recommendation
+changes a saved Keep, Investigate or Discard decision.
+
+Rank first groups the current screening recommendation as Shortlist,
+Investigate, then Reject. Within each group it sorts by the existing universal
+evidence score (domain, conflict and coverage), then business-name priority,
+optional project points, completed brand-fit rating and name. The legacy
+`Priority score` export remains universal plus project points; it is not the
+sort key. Verified eligible `.com` quotes score above provisional quotes;
+unknown, stale or failed pricing never becomes verified affordable. The $100
+ceiling applies to first-year acquisition including applicable fees; provisional
+quotes may omit charges and renewal is separate.
+
+For business projects, completed user ratings for audience fit, memorability,
+clarity and distinctiveness determine business-name priority out of 20.
+Otherwise three transparent surface signals contribute up to 5 each: 5–18
+alphanumeric characters (19–24 earns 2), simple letters/spaces/hyphens, at
+least one token outside the built-in generic business-word list. This fallback
+has a maximum of 15 points. The presence or absence of a
+prospecting/research-related token is shown for context but does not award
+points. CamelCase is split into tokens. These
+signals are only ordering proxies: they do not prove professionalism,
+memorability, B2B fit, uniqueness or trademark rights. Other project types
+do not receive these business-specific points. Ratings and saved evidence
+remain unchanged; the ranking is recomputed when displayed.
+
 Fixtures cover matching, empty/error responses, retained per-source evidence,
 selective retries, decision preservation, simultaneous/stale saves, atomic-write
 failures, recoverable UI edits and research checkpoint failures. Live provider
