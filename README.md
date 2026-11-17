@@ -22,8 +22,8 @@ Select or create a project in the sidebar, then choose a stage at the top:
    date. Filter by name and open the stored conflict evidence. The $100
    acquisition ceiling remains in force; provisional, stale, unavailable and
    unknown prices are not verified checkout totals.
-3. **Build the Shortlist** filters the ranked candidates and saves Keep,
-   Investigate or Discard without changing their automatic recommendation.
+3. **Build the Shortlist** shows all ranked candidates by default, with filters,
+   and saves Keep, Investigate or Discard without changing their automatic recommendation.
 4. **Choose the Final Five** saves up to five finalists in the project. Replace
    or restore them without deleting research or decisions, and download the
    final-five CSV report. Only fresh, verified all-in prices appear as verified

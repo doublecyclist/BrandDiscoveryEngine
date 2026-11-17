@@ -150,6 +150,28 @@ class AppDecisionTests(unittest.TestCase):
         self.assertTrue(any('1 of 4 candidates shown' in x.value for x in app.caption))
         self.assertFalse(app.exception)
 
+    def test_shortlist_defaults_to_all_undecided_candidates(self):
+        project = engine.new_project('Fictional new project')
+        project['names'] = ['Willow Key', 'Cedar Harbor', 'Mistral Field']
+        engine.save_project(project)
+        path = self.root / (project['id'] + '.json')
+        before = path.read_bytes()
+        app = self.launch()
+        app = next(x for x in app.radio if x.label == 'Workflow stage').set_value('Build the Shortlist').run()
+        selector = next(x for x in app.selectbox if x.label == 'Show shortlist candidates')
+        self.assertEqual(selector.value, 'All candidates')
+        self.assertEqual(set(selector.options),
+                         {'All candidates', 'Keep and Investigate', 'Keep', 'Investigate', 'Discard', 'To review'})
+        table = next(x.value for x in app.dataframe if 'Ranking explanation' in x.value.columns)
+        self.assertEqual(list(table['Name']), [row['Name'] for row in engine.export_rows(project)])
+        self.assertEqual(list(table['Rank']), [1, 2, 3])
+        self.assertEqual(list(table['Saved decision']), ['To review'] * 3)
+        self.assertTrue(any('3 of 3 candidates shown' in x.value for x in app.caption))
+        app = selector.set_value('Keep and Investigate').run()
+        self.assertTrue(any('0 of 3 candidates shown' in x.value for x in app.caption))
+        self.assertEqual(path.read_bytes(), before)
+        self.assertFalse(app.exception)
+
     def test_shortlist_stage_saves_each_manual_decision(self):
         project = self.fixture_project()
         original_runs = deepcopy(project['runs'])

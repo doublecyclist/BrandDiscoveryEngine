@@ -173,7 +173,7 @@ def render_workflow(project, persist, project_key):
     if stage == STAGES[2]:
         st.subheader('3. Build the Shortlist')
         view = st.selectbox('Show shortlist candidates', ('Keep and Investigate', 'All candidates', 'Keep', 'Investigate', 'Discard', 'To review'),
-                            key=project_key('workflow_shortlist_filter'))
+                            index=1, key=project_key('workflow_shortlist_filter'))
         decisions = {'Keep and Investigate': ('Keep', 'Maybe'), 'Keep': ('Keep',),
                      'Investigate': ('Maybe',), 'Discard': ('Reject',), 'To review': ('Undecided',)}
         shown = [row for row in rows if view == 'All candidates' or row['Decision'] in decisions[view]]
