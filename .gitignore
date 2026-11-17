@@ -1,13 +1,24 @@
-# Python
-__pycache__/
-*.pyc
-
-# VS Code
+.venv/
 .vscode/
-
-# Streamlit
 .streamlit/
-
-# Generated output
-brand_results.xlsx
-candidates.csv
+__pycache__/
+projects/
+*.pyc
+.env*
+*.json
+*.json.lock
+*.csv
+*.xlsx
+!/excel_template.xlsx
+*.db
+*.sqlite*
+*.pem
+*.key
+*.p12
+*.pfx
+*.token
+credentials.*
+secrets.toml
+*.tmp
+Independent_Review/
+Brand_Discovery_Engine_Independent_Review.zip
