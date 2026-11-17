@@ -9,6 +9,35 @@
 5. The app normally opens at `http://localhost:8501`. This local URL is **not accessible from your iPad** without additional networking/hosting.
 6. Existing saved projects are stored in your Windows AppData BrandDiscoveryEngine directory and may reopen automatically. Set `BRAND_ENGINE_DATA_DIR` to a new disposable directory before starting if you want an isolated installation.
 
+## Four-stage workflow
+
+Select or create a project in the sidebar, then choose a stage at the top:
+
+1. **Generate Names** combines two to ten supplied keywords locally. These
+   simple suggestions are not AI-generated or screened. Add the generated
+   batch, paste names, or import a CSV; duplicate names are skipped and earlier
+   candidates, decisions and research are retained.
+2. **Screen Names** displays automatic conflict assessment, `.com` status,
+   acquisition price, price reliability, automatic recommendation and research
+   date. Filter by name and open the stored conflict evidence. The $100
+   acquisition ceiling remains in force; provisional, stale, unavailable and
+   unknown prices are not verified checkout totals.
+3. **Build the Shortlist** shows all ranked candidates by default, with filters,
+   and saves Keep, Investigate or Discard without changing their automatic recommendation.
+4. **Choose the Final Five** saves up to five finalists in the project. Replace
+   or restore them without deleting research or decisions, and download the
+   final-five CSV report. Only fresh, verified all-in prices appear as verified
+   acquisition prices. If a finalist is removed from the candidate list, the
+   selection remains saved until explicitly changed; add the candidate back to
+   view its screening details.
+
+Expand **Research, pricing and advanced tools** below the stages to access the
+existing pricing controls, research queue, evidence, project editing, detailed
+review and full exports. Automated provider requests occur only when explicitly
+started. Conflict screening is preliminary and is not trademark clearance.
+The interface supports narrow screens, but real iPad Safari and remote
+connectivity still require separate testing.
+
 ## Included changes since v0.6.2
 
 - Current application version is 0.6.5.
